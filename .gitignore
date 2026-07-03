@@ -1,0 +1,20 @@
+# Fabric samples / generated network material
+fabric-install/
+fabric-samples/
+
+# Gateway pre-enrolled identities (MSP material)
+gateway/identities/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Go
+chaincode/marketplace/vendor/
+chaincode/marketplace/marketplace.tar.gz
+chaincode/marketplace/marketplace
+
+# Misc
+.DS_Store
+*.log
