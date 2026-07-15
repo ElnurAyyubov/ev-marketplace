@@ -4,40 +4,27 @@ import { asyncHandler, HttpError, requireIdentity } from './util';
 
 export const sessionsRouter = Router();
 
-sessionsRouter.post(
-  '/sessions',
-  asyncHandler(async (req, res) => {
-    const identity = requireIdentity(req);
-    const { reservationId } = req.body as { reservationId?: string };
-    if (!reservationId) throw new HttpError(400, 'reservationId is required');
-
-    const result = await withContract(identity, (contract) =>
-      contract.submitTransaction('StartSession', reservationId)
-    );
-    res.status(201).json({ sessionId: Buffer.from(result).toString('utf8') });
-  })
-);
+// Sessions are charger-initiated (Addendum A section 3.2/9): StartSession is
+// invoked directly by the charger-sim daemon using the bound charger's own
+// Fabric identity, not through this REST API. There is no POST /sessions
+// here by design.
 
 sessionsRouter.post(
-  '/sessions/:id/complete',
+  '/sessions/:id/stop',
   asyncHandler(async (req, res) => {
     const identity = requireIdentity(req);
-    const { deliveredEnergy } = req.body as { deliveredEnergy?: number };
-    if (deliveredEnergy === undefined) throw new HttpError(400, 'deliveredEnergy is required');
-
-    await withContract(identity, (contract) =>
-      contract.submitTransaction('CompleteSession', req.params.id, String(deliveredEnergy))
-    );
+    await withContract(identity, (contract) => contract.submitTransaction('StopSession', req.params.id));
     res.status(204).send();
   })
 );
 
 sessionsRouter.post(
-  '/sessions/:id/dispute',
+  '/sessions/:id/malfunction',
   asyncHandler(async (req, res) => {
     const identity = requireIdentity(req);
+    const { note } = req.body as { note?: string };
     await withContract(identity, (contract) =>
-      contract.submitTransaction('DisputeSession', req.params.id)
+      contract.submitTransaction('FlagChargerMalfunction', req.params.id, note ?? '')
     );
     res.status(204).send();
   })
@@ -54,8 +41,20 @@ sessionsRouter.get(
   })
 );
 
+// Live ticker / audit view: all readings for a session, ascending seq order.
+sessionsRouter.get(
+  '/sessions/:id/readings',
+  asyncHandler(async (req, res) => {
+    const identity = requireIdentity(req);
+    const result = await withContract(identity, (contract) =>
+      contract.evaluateTransaction('GetSessionReadings', req.params.id)
+    );
+    res.json(JSON.parse(Buffer.from(result).toString('utf8')));
+  })
+);
+
 // Not in the spec's REST list, but required by the frontend's
-// reservation/session status view (section 11).
+// reservation/session status view (base spec section 11).
 sessionsRouter.get(
   '/sessions',
   asyncHandler(async (req, res) => {

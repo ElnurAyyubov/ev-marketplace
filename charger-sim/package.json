@@ -1,28 +1,23 @@
 {
-  "name": "ev-charging-gateway",
+  "name": "ev-charging-charger-sim",
   "version": "1.0.0",
   "private": true,
-  "description": "REST gateway bridging the EV charging marketplace frontend to Hyperledger Fabric chaincode.",
+  "description": "Simulated smart-charger device daemon (Addendum A: trusted smart-charger metering architecture).",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts",
-    "test": "vitest run"
+    "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.10.9",
     "@hyperledger/fabric-gateway": "^1.5.0",
-    "cors": "^2.8.5",
-    "dotenv": "^17.4.2",
     "express": "^4.19.2"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.9",
     "tsx": "^4.16.2",
-    "typescript": "^5.5.3",
-    "vitest": "^4.1.10"
+    "typescript": "^5.5.3"
   }
 }

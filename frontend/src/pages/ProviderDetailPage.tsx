@@ -34,6 +34,10 @@ export function ProviderDetailPage({ providerId, onBack, onReserved }: Props) {
 
   const handleReserve = async () => {
     if (!selectedSlot) return;
+    if (requestedEnergy <= 0) {
+      setError("Requested energy can't be negative or zero");
+      return; 
+    }
     setError(null);
     setResult(null);
     try {
@@ -45,7 +49,7 @@ export function ProviderDetailPage({ providerId, onBack, onReserved }: Props) {
       setResult(
         provider?.approvalRequired
           ? `Reservation ${reservationId} created — awaiting owner approval.`
-          : `Reservation ${reservationId} confirmed, escrow locked.`
+          : `Reservation ${reservationId} confirmed, hold locked.`
       );
       onReserved(reservationId);
       load();

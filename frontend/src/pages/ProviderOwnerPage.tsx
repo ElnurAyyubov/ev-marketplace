@@ -1,16 +1,23 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { useIdentity } from '../context/IdentityContext';
-import { ChargingProvider, Reservation, Session } from '../api/types';
+import { Charger, ChargingProvider, Reservation, Session, Slot } from '../api/types';
 
 export function ProviderOwnerPage() {
   const { identity } = useIdentity();
   const [providers, setProviders] = useState<ChargingProvider[]>([]);
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [chargers, setChargers] = useState<Charger[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [sessions, setSessions] = useState<Record<string, Session[]>>({});
-  const [deliveredEnergyInputs, setDeliveredEnergyInputs] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
+
+  const [chargerSlotIndex, setChargerSlotIndex] = useState<number | null>(null);
+  const [chargerId, setChargerId] = useState('charger1');
+  const [ratedPowerKw, setRatedPowerKw] = useState(22);
+  const [registerBusy, setRegisterBusy] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
 
   const loadProviders = async () => {
     const results = await api.queryProviders(identity, { ownerId: identity });
@@ -18,6 +25,17 @@ export function ProviderOwnerPage() {
     if (!selectedProviderId && results.length > 0) {
       setSelectedProviderId(results[0].providerId);
     }
+  };
+
+  const loadChargerData = async (providerId: string) => {
+    const [s, c] = await Promise.all([
+      api.getSlots(identity, providerId),
+      api.listChargersByProvider(identity, providerId),
+    ]);
+    setSlots(s);
+    setChargers(c);
+    const unbound = s.find((slot) => !c.some((ch) => ch.slotIndex === Number(slot.slotId)));
+    setChargerSlotIndex(unbound ? Number(unbound.slotId) : null);
   };
 
   const loadReservations = async (providerId: string) => {
@@ -43,7 +61,10 @@ export function ProviderOwnerPage() {
   }, [identity]);
 
   useEffect(() => {
-    if (selectedProviderId) loadReservations(selectedProviderId);
+    if (selectedProviderId) {
+      loadReservations(selectedProviderId);
+      loadChargerData(selectedProviderId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProviderId]);
 
@@ -65,24 +86,26 @@ export function ProviderOwnerPage() {
     }
   };
 
-  const handleStartSession = async (reservationId: string) => {
+  const handleRegisterCharger = async () => {
+    if (!selectedProviderId || chargerSlotIndex === null) return;
+    setRegisterBusy(true);
+    setRegisterError(null);
     try {
-      await api.startSession(identity, reservationId);
-      if (selectedProviderId) loadReservations(selectedProviderId);
+      await api.registerCharger(identity, {
+        providerId: selectedProviderId,
+        slotIndex: chargerSlotIndex,
+        ratedPowerKw,
+        chargerId,
+      });
+      await loadChargerData(selectedProviderId);
     } catch (err) {
-      alert((err as Error).message);
+      setRegisterError((err as Error).message);
+    } finally {
+      setRegisterBusy(false);
     }
   };
 
-  const handleComplete = async (sessionId: string) => {
-    const delivered = deliveredEnergyInputs[sessionId] ?? 0;
-    try {
-      await api.completeSession(identity, sessionId, delivered);
-      if (selectedProviderId) loadReservations(selectedProviderId);
-    } catch (err) {
-      alert((err as Error).message);
-    }
-  };
+  const unboundSlots = slots.filter((slot) => !chargers.some((ch) => ch.slotIndex === Number(slot.slotId)));
 
   return (
     <div className="card">
@@ -106,6 +129,64 @@ export function ProviderOwnerPage() {
 
       {error && <p className="error">{error}</p>}
 
+      {selectedProviderId && (
+        <div className="card" style={{ background: '#fafafa' }}>
+          <h3>Chargers</h3>
+          <p>
+            Each slot needs one bound smart-charger device before it can serve sessions. Under the
+            trust assumption (see README), readings from a bound charger's identity are treated as
+            ground truth for settlement.
+          </p>
+          {chargers.length > 0 && (
+            <ul>
+              {chargers.map((c) => (
+                <li key={c.chargerId}>
+                  Slot {c.slotIndex}: <strong>{c.chargerId}</strong> — {c.ratedPowerKw} kW —{' '}
+                  <span className={`badge ${c.status}`}>{c.status}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {unboundSlots.length > 0 ? (
+            <div className="row" style={{ alignItems: 'flex-end' }}>
+              <div className="field">
+                <label>Slot</label>
+                <select
+                  value={chargerSlotIndex ?? ''}
+                  onChange={(e) => setChargerSlotIndex(Number(e.target.value))}
+                >
+                  {unboundSlots.map((slot) => (
+                    <option key={slot.slotId} value={slot.slotId}>
+                      Slot {slot.slotId}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>Charger identity</label>
+                <input value={chargerId} onChange={(e) => setChargerId(e.target.value)} />
+              </div>
+              <div className="field">
+                <label>Rated power (kW)</label>
+                <input
+                  type="number"
+                  value={ratedPowerKw}
+                  onChange={(e) => setRatedPowerKw(Number(e.target.value))}
+                  min={1}
+                />
+              </div>
+              <button onClick={handleRegisterCharger} disabled={registerBusy}>
+                Register charger
+              </button>
+            </div>
+          ) : (
+            slots.length > 0 && <p>Every slot has a bound charger.</p>
+          )}
+          {registerError && <p className="error">{registerError}</p>}
+        </div>
+      )}
+
       {reservations.map((r) => {
         const session = sessions[r.reservationId]?.[0];
         return (
@@ -114,7 +195,7 @@ export function ProviderOwnerPage() {
               <strong>{r.reservationId}</strong> <span className={`badge ${r.state}`}>{r.state}</span>
             </p>
             <p>
-              Driver: {r.driverId} · Slot {r.slotId} · Requested {r.requestedEnergy} kWh · Escrow{' '}
+              Driver: {r.driverId} · Slot {r.slotId} · Requested {r.requestedEnergy} kWh · Hold{' '}
               {r.escrowAmount}
             </p>
 
@@ -128,33 +209,25 @@ export function ProviderOwnerPage() {
                 </>
               )}
               {r.state === 'CONFIRMED' && !session && (
-                <button onClick={() => handleStartSession(r.reservationId)}>Start Session</button>
+                <p style={{ color: '#666', fontStyle: 'italic' }}>
+                  Waiting for the bound charger to start the session (plug-in).
+                </p>
               )}
             </div>
 
             {session && (
               <div style={{ marginTop: 8 }}>
                 <p>
-                  Session <strong>{session.sessionId}</strong>{' '}
+                  Session <strong>{session.sessionId}</strong> (charger {session.chargerId}){' '}
                   <span className={`badge ${session.state}`}>{session.state}</span>
                 </p>
                 {session.state === 'Active' && (
-                  <div className="row">
-                    <input
-                      type="number"
-                      placeholder="Delivered energy (kWh)"
-                      value={deliveredEnergyInputs[session.sessionId] ?? ''}
-                      onChange={(e) =>
-                        setDeliveredEnergyInputs((prev) => ({
-                          ...prev,
-                          [session.sessionId]: Number(e.target.value),
-                        }))
-                      }
-                    />
-                    <button onClick={() => handleComplete(session.sessionId)}>Complete Session</button>
-                  </div>
+                  <p>
+                    Live: {(session.cumulativeWh / 1000).toFixed(3)} kWh delivered so far (
+                    {session.readingCount} on-ledger readings) — read-only, machine-reported.
+                  </p>
                 )}
-                {session.state !== 'Active' && (
+                {session.state === 'Settled' && (
                   <p>
                     Delivered {session.deliveredEnergy} kWh, settled {session.settledAmount}
                   </p>

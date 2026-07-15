@@ -1,6 +1,8 @@
 import {
+  Charger,
   ChargingProvider,
   Identity,
+  Reading,
   Reservation,
   Session,
   Slot,
@@ -77,6 +79,12 @@ export const api = {
     );
   },
 
+  searchProvidersNl: (
+    identity: Identity,
+    query: string,
+    center?: { lat: number; lng: number; radiusKm: number }
+  ) => request<ChargingProvider[]>(identity, 'POST', '/search/nl', { query, center }),
+
   getProvider: (identity: Identity, providerId: string) =>
     request<ChargingProvider>(identity, 'GET', `/providers/${providerId}`),
 
@@ -85,6 +93,17 @@ export const api = {
 
   getSlots: (identity: Identity, providerId: string) =>
     request<Slot[]>(identity, 'GET', `/providers/${providerId}/slots`),
+
+  registerCharger: (
+    identity: Identity,
+    payload: { providerId: string; slotIndex: number; ratedPowerKw: number; chargerId: string }
+  ) => request<{ chargerId: string }>(identity, 'POST', '/chargers', payload),
+
+  getCharger: (identity: Identity, chargerId: string) =>
+    request<Charger>(identity, 'GET', `/chargers/${chargerId}`),
+
+  listChargersByProvider: (identity: Identity, providerId: string) =>
+    request<Charger[]>(identity, 'GET', `/providers/${providerId}/chargers`),
 
   createReservation: (
     identity: Identity,
@@ -106,17 +125,21 @@ export const api = {
   listReservationsByProvider: (identity: Identity, providerId: string) =>
     request<Reservation[]>(identity, 'GET', `/reservations?providerId=${providerId}`),
 
-  startSession: (identity: Identity, reservationId: string) =>
-    request<{ sessionId: string }>(identity, 'POST', '/sessions', { reservationId }),
+  // Sessions are charger-initiated (Addendum A section 3.2/9) -- there is no
+  // driver/gateway "start session" call. The charger-sim daemon starts
+  // sessions directly against Fabric using its own charger identity.
 
-  completeSession: (identity: Identity, sessionId: string, deliveredEnergy: number) =>
-    request<void>(identity, 'POST', `/sessions/${sessionId}/complete`, { deliveredEnergy }),
+  stopSession: (identity: Identity, sessionId: string) =>
+    request<void>(identity, 'POST', `/sessions/${sessionId}/stop`),
 
-  disputeSession: (identity: Identity, sessionId: string) =>
-    request<void>(identity, 'POST', `/sessions/${sessionId}/dispute`),
+  flagMalfunction: (identity: Identity, sessionId: string, note: string) =>
+    request<void>(identity, 'POST', `/sessions/${sessionId}/malfunction`, { note }),
 
   getSession: (identity: Identity, sessionId: string) =>
     request<Session>(identity, 'GET', `/sessions/${sessionId}`),
+
+  getSessionReadings: (identity: Identity, sessionId: string) =>
+    request<Reading[]>(identity, 'GET', `/sessions/${sessionId}/readings`),
 
   listSessionsByReservation: (identity: Identity, reservationId: string) =>
     request<Session[]>(identity, 'GET', `/sessions?reservationId=${reservationId}`),

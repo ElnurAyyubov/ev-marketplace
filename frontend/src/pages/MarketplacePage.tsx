@@ -19,6 +19,8 @@ export function MarketplacePage({ onSelectProvider }: Props) {
   const [radiusKm, setRadiusKm] = useState(10);
   const [providers, setProviders] = useState<ChargingProvider[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [nlQuery, setNlQuery] = useState('');
+  const [nlLoading, setNlLoading] = useState(false);
 
   const search = async () => {
     setError(null);
@@ -37,6 +39,24 @@ export function MarketplacePage({ onSelectProvider }: Props) {
     }
   };
 
+  const searchNl = async () => {
+    if (!nlQuery.trim()) return;
+    setError(null);
+    setNlLoading(true);
+    try {
+      const results = await api.searchProvidersNl(
+        identity,
+        nlQuery,
+        useProximity ? { lat, lng, radiusKm } : undefined
+      );
+      setProviders(results);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setNlLoading(false);
+    }
+  };
+
   useEffect(() => {
     search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -45,6 +65,23 @@ export function MarketplacePage({ onSelectProvider }: Props) {
   return (
     <div className="card">
       <h2>Marketplace</h2>
+
+      <div className="field">
+        <label>Describe what you&apos;re looking for</label>
+        <div className="row">
+          <input
+            style={{ flex: 1 }}
+            value={nlQuery}
+            onChange={(e) => setNlQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && searchNl()}
+            placeholder="e.g. cheap commercial charger, no approval, under 25"
+          />
+          <button onClick={searchNl} disabled={nlLoading}>
+            {nlLoading ? 'Searching…' : 'Search'}
+          </button>
+        </div>
+      </div>
+
       <div className="row">
         <div className="field">
           <label>Type</label>

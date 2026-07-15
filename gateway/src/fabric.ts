@@ -50,12 +50,30 @@ function loadIdentity(name: KnownIdentity): Identity {
   return { mspId: MSP_ID, credentials };
 }
 
+/**
+ * Re-enrolling an identity leaves its old key behind in the keystore
+ * alongside the new one (fabric-ca-client overwrites signcerts/cert.pem but
+ * never deletes prior keys), so the keystore directory can hold multiple
+ * _sk files. Directory listing order is filesystem-dependent and not
+ * guaranteed to put the newest key first, so the only reliable way to find
+ * the right key is to match its public key against the current cert.
+ */
 function loadSigner(name: KnownIdentity): Signer {
   const keystoreDir = path.join(IDENTITIES_DIR, name, 'msp', 'keystore');
-  const [keyFile] = fs.readdirSync(keystoreDir);
+  const certPath = path.join(IDENTITIES_DIR, name, 'msp', 'signcerts', 'cert.pem');
+  const cert = new crypto.X509Certificate(fs.readFileSync(certPath));
+  const certPublicKeyDer = cert.publicKey.export({ type: 'spki', format: 'der' });
+
+  const keyFiles = fs.readdirSync(keystoreDir);
+  const keyFile = keyFiles.find((file) => {
+    const privateKey = crypto.createPrivateKey(fs.readFileSync(path.join(keystoreDir, file)));
+    const publicKeyDer = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
+    return publicKeyDer.equals(certPublicKeyDer);
+  });
   if (!keyFile) {
-    throw new Error(`no private key found for identity '${name}' in ${keystoreDir}`);
+    throw new Error(`no private key in ${keystoreDir} matches the certificate for '${name}' at ${certPath}`);
   }
+
   const privateKeyPem = fs.readFileSync(path.join(keystoreDir, keyFile));
   const privateKey = crypto.createPrivateKey(privateKeyPem);
   return signers.newPrivateKeySigner(privateKey);

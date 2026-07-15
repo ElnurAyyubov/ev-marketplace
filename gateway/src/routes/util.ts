@@ -1,3 +1,4 @@
+import { GatewayError } from '@hyperledger/fabric-gateway';
 import { NextFunction, Request, RequestHandler, Response } from 'express';
 import { isKnownIdentity, KNOWN_IDENTITIES, KnownIdentity } from '../fabric';
 
@@ -28,6 +29,11 @@ export function asyncHandler(
   };
 }
 
+/** Strips Fabric's "chaincode response <code>, " wrapper, leaving just the ChaincodeException message. */
+function unwrapChaincodeMessage(message: string): string {
+  return message.replace(/^chaincode response \d+,\s*/, '');
+}
+
 export function errorMiddleware(
   err: unknown,
   _req: Request,
@@ -37,6 +43,14 @@ export function errorMiddleware(
 ): void {
   if (err instanceof HttpError) {
     res.status(err.status).json({ error: err.message });
+    return;
+  }
+  // Fabric wraps the real cause (the chaincode's rejection message, an
+  // endorsement policy mismatch, etc.) per-peer in GatewayError.details;
+  // err.message alone is just the generic gRPC status ("10 ABORTED: ...").
+  if (err instanceof GatewayError && err.details.length > 0) {
+    const message = err.details.map((detail) => unwrapChaincodeMessage(detail.message)).join('; ');
+    res.status(400).json({ error: message });
     return;
   }
   const message = err instanceof Error ? err.message : String(err);

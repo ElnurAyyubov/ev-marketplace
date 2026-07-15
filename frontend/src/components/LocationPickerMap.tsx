@@ -1,16 +1,20 @@
 import L from 'leaflet';
 import { MapContainer, Marker, TileLayer, useMapEvents } from 'react-leaflet';
 
-// Default marker icon assets don't resolve correctly through Vite's bundler
-// by default; point them at the package's own CDN-free bundled URLs.
-import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
-import markerIcon from 'leaflet/dist/images/marker-icon.png';
-import markerShadow from 'leaflet/dist/images/marker-shadow.png';
-
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
+// The default Leaflet marker PNGs don't resolve reliably through Vite's
+// bundler, so use a self-contained inline SVG pin instead of asset URLs.
+const pinIcon = L.divIcon({
+  className: 'location-pin-icon',
+  html: `
+    <svg width="32" height="42" viewBox="0 0 32 42" xmlns="http://www.w3.org/2000/svg">
+      <path d="M16 0C7.163 0 0 7.163 0 16c0 11 16 26 16 26s16-15 16-26c0-8.837-7.163-16-16-16z"
+            fill="#1a2b3c" stroke="#ffffff" stroke-width="1.5"/>
+      <circle cx="16" cy="16" r="6" fill="#ffffff"/>
+    </svg>
+  `,
+  iconSize: [32, 42],
+  iconAnchor: [16, 42],
+  popupAnchor: [0, -38],
 });
 
 interface Props {
@@ -36,7 +40,7 @@ export function LocationPickerMap({ lat, lng, onChange }: Props) {
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <Marker position={[lat, lng]} />
+        <Marker position={[lat, lng]} icon={pinIcon} />
         <ClickHandler onChange={onChange} />
       </MapContainer>
     </div>

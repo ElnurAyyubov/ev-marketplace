@@ -2,6 +2,11 @@
   box-sizing: border-box;
 }
 
+.location-pin-icon {
+  background: transparent;
+  border: none;
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -147,16 +152,43 @@ button:disabled {
 }
 
 .badge.COMPLETED,
-.badge.Completed {
+.badge.Completed,
+.badge.Settled {
   background: #d4edda;
   color: #155724;
 }
 
 .badge.CANCELLED,
-.badge.EXPIRED,
-.badge.Disputed {
+.badge.EXPIRED {
   background: #f8d7da;
   color: #721c24;
+}
+
+.ticker {
+  background: #1a2b3c;
+  color: white;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 8px 0;
+}
+
+.ticker-kwh {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.ticker-cost {
+  font-size: 16px;
+  color: #cfe0ff;
+  margin: 2px 0 8px;
+}
+
+.ticker button {
+  background: #2ecc71;
+  border-color: #2ecc71;
+  color: #0a2b16;
+  font-weight: 600;
 }
 
 .provider-list-item {

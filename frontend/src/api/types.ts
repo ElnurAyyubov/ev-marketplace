@@ -36,6 +36,17 @@ export interface Slot {
   currentReservationId: string;
 }
 
+export type ChargerStatus = 'Active' | 'Inactive';
+
+export interface Charger {
+  docType: 'charger';
+  chargerId: string;
+  providerId: string;
+  slotIndex: number;
+  ratedPowerKw: number;
+  status: ChargerStatus;
+}
+
 export type ReservationState =
   | 'REQUESTED'
   | 'CONFIRMED'
@@ -51,21 +62,34 @@ export interface Reservation {
   slotId: string;
   driverId: string;
   requestedEnergy: number;
-  escrowAmount: number;
+  escrowAmount: number; // pre-authorization hold, not a disputed-settlement escrow (Addendum A section 4)
   state: ReservationState;
   createdAt: number;
-  expiresAt: number;
+  expiresAt: number; // also functions as the charger-start "startDeadline" while CONFIRMED
 }
 
-export type SessionState = 'Active' | 'Completed' | 'Disputed';
+// Addendum A section 5.2: the entire session machine is ACTIVE -> SETTLED.
+export type SessionState = 'Active' | 'Settled';
 
 export interface Session {
   docType: 'session';
   sessionId: string;
   reservationId: string;
+  chargerId: string;
   startTime: number;
   endTime: number;
-  deliveredEnergy: number;
+  cumulativeWh: number; // live/final cumulative meter reading, in Wh
+  readingCount: number;
+  lastReadingTimestamp: number;
+  deliveredEnergy: number; // kWh, set at StopSession = floor(cumulativeWh / 1000)
   settledAmount: number;
   state: SessionState;
+}
+
+export interface Reading {
+  docType: 'reading';
+  sessionId: string;
+  seq: number;
+  cumulativeWh: number;
+  timestamp: number;
 }

@@ -5,16 +5,42 @@ fabric-samples/
 # Gateway pre-enrolled identities (MSP material)
 gateway/identities/
 
+# Secrets (e.g. gateway/.env holds ANTHROPIC_API_KEY)
+.env
+.claude
+
 # Node
 node_modules/
 dist/
 *.tsbuildinfo
+coverage/
 
-# Go
-chaincode/marketplace/vendor/
+# Java chaincode (Gradle)
+chaincode/marketplace/build/
+chaincode/marketplace/.gradle/
 chaincode/marketplace/marketplace.tar.gz
-chaincode/marketplace/marketplace
+
+# Env variants (besides gateway/.env)
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor swap/backup files
+*.swp
+*.swo
+*~
 
 # Misc
-.DS_Store
 *.log
+
+SMART_CHARGER_ADDENDUM.md
+NL_SEARCH_ADDENDUM.md
+MVP_BUILD_SPEC.md
