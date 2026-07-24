@@ -5,6 +5,9 @@ fabric-samples/
 # Gateway pre-enrolled identities (MSP material)
 gateway/identities/
 
+# Per-instance gateway logs from scripts/run-user.sh
+.run/
+
 # Secrets (e.g. gateway/.env holds ANTHROPIC_API_KEY)
 .env
 .claude
@@ -44,3 +47,4 @@ Thumbs.db
 SMART_CHARGER_ADDENDUM.md
 NL_SEARCH_ADDENDUM.md
 MVP_BUILD_SPEC.md
+TECHNICAL_OVERVIEW.md

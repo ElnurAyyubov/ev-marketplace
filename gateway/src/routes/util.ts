@@ -1,17 +1,10 @@
 import { GatewayError } from '@hyperledger/fabric-gateway';
 import { NextFunction, Request, RequestHandler, Response } from 'express';
-import { isKnownIdentity, KNOWN_IDENTITIES, KnownIdentity } from '../fabric';
+import { GATEWAY_USER } from '../fabric';
 
 /** Reads and validates the X-Identity header selecting which pre-enrolled identity to act as. */
-export function requireIdentity(req: Request): KnownIdentity {
-  const header = req.header('X-Identity');
-  if (!header || !isKnownIdentity(header)) {
-    throw new HttpError(
-      400,
-      `missing or invalid X-Identity header; must be one of ${KNOWN_IDENTITIES.join(', ')}`
-    );
-  }
-  return header;
+export function requireIdentity(req: Request) {
+  return GATEWAY_USER;
 }
 
 export class HttpError extends Error {

@@ -1,17 +1,18 @@
 import { createContext, ReactNode, useContext, useState } from 'react';
 import { Identity } from '../api/types';
 
+const IDENTITY = import.meta.env.VITE_USER_ID
+
 interface IdentityContextValue {
   identity: Identity;
-  setIdentity: (identity: Identity) => void;
 }
 
 const IdentityContext = createContext<IdentityContextValue | undefined>(undefined);
 
 export function IdentityProvider({ children }: { children: ReactNode }) {
-  const [identity, setIdentity] = useState<Identity>('alice');
+  const [identity] = useState<Identity>(IDENTITY);
   return (
-    <IdentityContext.Provider value={{ identity, setIdentity }}>
+    <IdentityContext.Provider value={{ identity }}>
       {children}
     </IdentityContext.Provider>
   );

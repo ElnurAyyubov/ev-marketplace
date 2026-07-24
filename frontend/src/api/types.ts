@@ -1,4 +1,4 @@
-export type Identity = 'admin' | 'alice' | 'bob' | 'provider1';
+export type Identity = string;
 
 export type ProviderType = 'Commercial' | 'Residential';
 export type ProviderStatus = 'Active' | 'Inactive';

@@ -56,104 +56,120 @@ not reopen or reverse settlement.
 # 2. Deploy the marketplace chaincode (Java; builds via the Gradle wrapper)
 ./network/deployCC.sh
 
-# 3. Pre-enroll the fixed demo identities the gateway acts as
-#    (admin / alice / bob / provider1) plus at least one charger identity
-#    (charger1) — see "Identities" below.
+# 3. Bootstrap the 'admin' identity (one-time; it's the registrar every
+#    other identity gets enrolled through) — see "Identities" below.
 
-# 4. Start the gateway REST service
-cd gateway
-npm install
-npm run build
-npm start          # listens on http://localhost:3000
+# 4. Launch a dedicated gateway + frontend pair per user. Each call
+#    auto-enrolls the username the first time it's used, then starts both,
+#    wired together — no identity picker, no shared multi-tenant gateway.
+./scripts/run-user.sh alice     3001 5174   # terminal 1
+./scripts/run-user.sh provider1 3002 5175   # terminal 2, another user
 
-# 5. Start the frontend
-cd frontend
-npm install
-npm run dev         # http://localhost:5173
-
-# 6. Start one (or more) simulated smart chargers — see charger-sim/README.md
-cd charger-sim
-npm install
+# 5. Start one (or more) simulated smart chargers — see charger-sim/README.md.
+#    A charger first needs its own enrolled identity (separate from the
+#    on-ledger RegisterCharger call made from a provider owner's frontend):
+./scripts/enroll-charger.sh charger1
+cd charger-sim && npm install
 CHARGER_ID=charger1 ADMIN_PORT=4001 npm run dev
 ```
 
-Tear down with `./network/down.sh`.
+Tear down with `./network/down.sh`. Containers can also stop independently
+across a host restart/sleep — the Fabric CA containers in particular have no
+restart policy and can be left behind while the peers/orderer stay up
+(`docker ps -a` will show them `Exited`). Bring the missing ones back
+individually rather than tearing the whole network down:
+```bash
+docker start couchdb0 couchdb1 orderer.example.com \
+  peer0.org1.example.com peer0.org2.example.com \
+  ca_org1 ca_org2 ca_orderer
+```
 
-## Identities (MVP simplification)
+## Identities
 
-Per the build spec (section 5), the browser never talks to Fabric directly —
-it can't hold X.509 credentials or speak the peer gRPC protocol. The gateway
-service holds a small fixed set of pre-enrolled identities and the frontend
-selects which one to act as via an "acting as" dropdown, sent as the
-`X-Identity` header on every request. Real per-user CA enrollment is out of
-scope for this MVP.
+The browser never talks to Fabric directly — it can't hold X.509
+credentials or speak the peer gRPC protocol. Each user gets their own
+dedicated gateway process holding exactly one identity's private key, and
+their own frontend instance pointed at it (`scripts/run-user.sh`, see
+above). There's no shared multi-tenant gateway and no "acting as" dropdown
+— a frontend tab only ever acts as the one identity its gateway was started
+with. Usernames are enrolled against the Org1 Fabric CA automatically the
+first time `run-user.sh` sees a name that doesn't exist yet under
+`gateway/identities/` (registering it using the already-enrolled `admin`
+identity as the CA registrar — see `scripts/run-user.sh` for the exact
+`fabric-ca-client` calls).
 
-The demo ships with these identities enrolled from the test-network's Org1
-CA: `admin` (faucet/mint authority), `alice`, `bob`, `provider1`, plus
-charger identities `charger1`/`charger2`. Charger identities are enrolled
-the same way as any other client identity, but are used only by the
-`charger-sim` daemon (Addendum A section 7) — never selectable in the
-frontend's "acting as" dropdown, since the entire point of the trusted-
-metering architecture is that only the charger's own certificate can sign
-`StartSession`/`RecordMeterReading`. To (re-)enroll all of them against a
-fresh network:
+That means `admin` itself has to be bootstrapped once, directly against the
+CA's own bootstrap credentials, before running `run-user.sh` for anyone
+else:
 
 ```bash
 export PATH=$PATH:$(pwd)/fabric-samples/bin
-TN=$(pwd)/fabric-samples/test-network
-CA_CERT=${TN}/organizations/fabric-ca/org1/ca-cert.pem
-OUT=$(pwd)/gateway/identities
-
-# "admin" is the CA's own bootstrap identity — enroll it directly.
 fabric-ca-client enroll -u https://admin:adminpw@localhost:7054 --caname ca-org1 \
-  -M "${OUT}/admin/msp" --tls.certfiles "$CA_CERT"
-
-# Register + enroll the rest as ordinary client identities (drivers/owners
-# and chargers alike — the chaincode distinguishes them by role via the
-# Charger record's chargerId binding, not by MSP attributes).
-for name in alice bob provider1 charger1 charger2; do
-  fabric-ca-client register --caname ca-org1 --id.name "$name" --id.secret "${name}pw" \
-    --id.type client -u https://localhost:7054 --tls.certfiles "$CA_CERT" \
-    --mspdir "${OUT}/admin/msp"
-  fabric-ca-client enroll -u https://${name}:${name}pw@localhost:7054 --caname ca-org1 \
-    -M "${OUT}/${name}/msp" --tls.certfiles "$CA_CERT"
-done
-
-# peer CLI / Node MSP loading needs NodeOUs config alongside each identity.
-CFG=${TN}/organizations/peerOrganizations/org1.example.com/users/User1@org1.example.com/msp/config.yaml
-for name in admin alice bob provider1 charger1 charger2; do
-  cp "$CFG" "${OUT}/${name}/msp/config.yaml"
-done
+  -M "$(pwd)/gateway/identities/admin/msp" \
+  --tls.certfiles "$(pwd)/fabric-samples/test-network/organizations/fabric-ca/org1/ca-cert.pem"
 ```
 
-The chaincode derives each caller's identity from their certificate's
-CommonName, so these show up on-chain simply as `admin`, `alice`, `bob`,
-`provider1`, `charger1`, `charger2`.
+`admin` is also the only identity allowed to mint tokens (chaincode-enforced
+in `SmartContract.java`'s `Mint`/`ResetMarketplaceData`), so there's no
+faucet button in any frontend — mint from the CLI instead, which connects
+directly as `admin` without needing any gateway running:
+```bash
+./scripts/faucet.sh alice 500
+```
+
+**Chargers** are a separate case. Registering one from a provider owner's
+frontend (`Provider Owner View` → register charger) only creates the
+on-ledger `Charger` record (providerId/slotIndex/ratedPowerKw) — it does
+**not** enroll a CA identity. `charger-sim` needs an actual certificate
+under that same name to sign `StartSession`/`RecordMeterReading` (Addendum A
+section 7), so enroll it once, using whatever chargerId you registered
+on-ledger:
+```bash
+./scripts/enroll-charger.sh <chargerId>
+```
+
+The chaincode derives every caller's identity from their certificate's
+CommonName, so on-chain a user or charger simply shows up as whatever name
+you passed to `run-user.sh` / `enroll-charger.sh`.
 
 ## Demo loop
 
-1. **Register User** — register `alice` (driver) and `provider1` (owns a
-   commercial station) and/or `bob` (owns a residential charger).
-2. **Create Provider** — as `provider1`, register a Commercial provider
-   (multi-slot, no approval needed); as `bob`, register a Residential
+Launch a gateway+frontend pair per participant, each in its own
+terminal/browser tab:
+```bash
+./scripts/run-user.sh alice     3001 5174
+./scripts/run-user.sh provider1 3002 5175
+./scripts/run-user.sh bob       3003 5176
+```
+
+1. **Register User** — in alice's tab (`:5174`) and provider1's tab
+   (`:5175`)/bob's tab (`:5176`), use "Register User".
+2. **Create Provider** — in provider1's tab, register a Commercial provider
+   (multi-slot, no approval needed); in bob's tab, register a Residential
    provider with "require my approval" checked.
-3. Use the faucet in the identity bar to mint `alice` some balance.
-4. **Provider Owner View** — as the provider owner, register a charger
+3. Mint alice some balance: `./scripts/faucet.sh alice 500`.
+4. **Provider Owner View** — in the owning tab, register a charger
    (`charger1`) against one of the provider's slots, giving it a rated
    power in kW. This binds that charger identity to the slot; only that
-   identity may start sessions or record readings there.
-5. **Marketplace** — search/filter, click a provider on the map or list.
-6. **Reserve** — as `alice`, pick a free slot and reserve. Commercial
+   identity may start sessions or record readings there. Then enroll its CA
+   identity and start the simulator (see "Identities" above):
+   ```bash
+   ./scripts/enroll-charger.sh charger1
+   cd charger-sim && CHARGER_ID=charger1 ADMIN_PORT=4001 npm run dev
+   ```
+5. **Marketplace** (alice's tab) — search/filter, click a provider on the
+   map or list.
+6. **Reserve** — in alice's tab, pick a free slot and reserve. Commercial
    reservations confirm immediately (hold locked); residential ones sit as
    `REQUESTED` until the owner approves.
-7. **Provider Owner View** — as `bob`, approve the pending reservation
+7. **Provider Owner View** — in bob's tab, approve the pending reservation
    (locks the hold). The reservation is now `CONFIRMED`, waiting for the
    bound charger to start the session.
 8. With `charger-sim` running for `charger1`, simulate plug-in:
    `curl -X POST http://localhost:4001/sim/plugin -d '{"reservationId":"..."}'`.
    The simulator starts the session and begins recording signed meter
    readings every `READING_INTERVAL_MS` (15s default).
-9. **My Reservations** (as `alice`) shows the live charging ticker: kWh and
+9. **My Reservations** (alice's tab) shows the live charging ticker: kWh and
    running cost counting up, anchored to real on-ledger readings. Click
    **Stop Charging** (or let the simulator's hold-cap auto-stop trigger) —
    settlement is computed entirely from the last on-ledger cumulative
@@ -169,10 +185,13 @@ CommonName, so these show up on-chain simply as `admin`, `alice`, `bob`,
 - `FlagChargerMalfunction` only records an off-chain-followup flag; per the
   stated trust assumption there is nothing on-ledger left to adjudicate, so
   there is no resolution workflow and it never reopens settlement.
-- All demo identities (including chargers) are provisioned from Org1's CA
-  for simplicity — MSP org membership isn't meaningful to the business
-  logic; the charger/driver/owner distinction is enforced purely by
-  certificate CommonName checks in chaincode.
+- All identities (including chargers) are provisioned from Org1's CA for
+  simplicity — MSP org membership isn't meaningful to the business logic;
+  the charger/driver/owner distinction is enforced purely by certificate
+  CommonName checks in chaincode.
+- Per-user key custody is a process boundary, not a physical one: each
+  user's private key lives on whatever machine runs `scripts/run-user.sh`
+  for them, not on a separate device/HSM they alone control.
 - Device certification, sealed firmware, and physical anti-tamper measures
   for the smart-charger hardware are assumed, not implemented (see the
   trust assumption above).
@@ -202,13 +221,6 @@ with:
 peer lifecycle chaincode querycommitted --channelID mychannel --name marketplace
 ```
 
-to start:
-docker start couchdb0 couchdb1 ca_orderer ca_org1 ca_org2
-docker start orderer.example.com
-docker start peer0.org1.example.com peer0.org2.example.com
+to run the charger:
 
-cd /home/nurx/Desktop/Research/dapp/gateway
-npm start          # http://localhost:3000
-
-cd /home/nurx/Desktop/Research/dapp/frontend
-npm run dev        # http://localhost:5173
+curl -X POST http://localhost:4001/sim/plugin -H 'Content-Type: application/json' -d '{"reservationId": ""}'
