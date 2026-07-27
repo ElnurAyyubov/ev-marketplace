@@ -13,7 +13,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  await withContract('admin', (contract) => contract.submitTransaction('Mint', userId, amountStr));
+  await withContract('minteradmin', (contract) => contract.submitTransaction('Mint', userId, amountStr));
   console.log(`minted ${amountStr} to ${userId}`);
 }
 

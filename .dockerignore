@@ -1,0 +1,20 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.run
+chaincode
+charger-sim
+fabric-install
+
+# Never let identity/key material into an image layer.
+gateway/identities
+
+# fabric-samples/ is huge and mostly irrelevant to the image -- keep only
+# the fabric-ca-client binary the Dockerfile copies in. Requires BuildKit
+# (default since Docker 23) for the negation to take effect.
+fabric-samples/*
+!fabric-samples/bin
+fabric-samples/bin/*
+!fabric-samples/bin/fabric-ca-client

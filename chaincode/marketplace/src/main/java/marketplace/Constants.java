@@ -64,5 +64,5 @@ public final class Constants {
     public static final long MALFUNCTION_WINDOW_SECONDS = 24 * 60 * 60;
 
     // Faucet/mint authority identity (MVP simplification, see SmartContract).
-    public static final String ADMIN_IDENTITY = "admin";
+    public static final String ADMIN_IDENTITY = "minteradmin";
 }

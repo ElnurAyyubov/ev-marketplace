@@ -1,4 +1,4 @@
-import { withContract } from './fabric';
+import { withContract, requireGatewayUser } from './fabric';
 
 interface ReservationRecord {
   reservationId: string;
@@ -11,9 +11,9 @@ const SWEEP_STATES = ['REQUESTED', 'CONFIRMED'] as const;
 
 async function sweepExpiredReservations(): Promise<void> {
   const nowSeconds = Math.floor(Date.now() / 1000);
-
+  const gatewayUser = requireGatewayUser();
   for (const state of SWEEP_STATES) {
-    const result = await withContract('admin', (contract) =>
+    const result = await withContract(gatewayUser, (contract) =>
       contract.evaluateTransaction('QueryReservationsByState', state)
     );
     const reservations = JSON.parse(Buffer.from(result).toString('utf8')) as ReservationRecord[];
@@ -21,7 +21,7 @@ async function sweepExpiredReservations(): Promise<void> {
     for (const reservation of reservations) {
       if (reservation.expiresAt >= nowSeconds) continue;
       try {
-        await withContract('admin', (contract) =>
+        await withContract(gatewayUser, (contract) =>
           contract.submitTransaction('ExpireReservation', reservation.reservationId)
         );
       } catch (err) {

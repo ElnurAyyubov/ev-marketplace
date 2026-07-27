@@ -11,12 +11,12 @@ CHAINCODE_DIR="${REPO_ROOT}/chaincode/marketplace"
 export PATH="${REPO_ROOT}/fabric-samples/bin:${PATH}"
 CHANNEL_NAME="${CHANNEL_NAME:-mychannel}"
 CC_NAME="${CC_NAME:-marketplace}"
-CC_VERSION="${CC_VERSION:-3.0}"
+CC_VERSION="${CC_VERSION:-3.1}"
 # Fabric's chaincode lifecycle requires a strictly increasing sequence number
 # for every definition change on this channel, even across a language swap.
 # Bump this if you redeploy again. Check the current committed sequence with:
 #   peer lifecycle chaincode querycommitted --channelID <channel> --name marketplace
-CC_SEQUENCE="${CC_SEQUENCE:-1}"
+CC_SEQUENCE="${CC_SEQUENCE:-3}"
 
 cd "${TEST_NETWORK_DIR}"
 ./network.sh deployCC -c "${CHANNEL_NAME}" -ccn "${CC_NAME}" -ccp "${CHAINCODE_DIR}" -ccl java -ccv "${CC_VERSION}" -ccs "${CC_SEQUENCE}"

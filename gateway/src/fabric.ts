@@ -5,19 +5,24 @@ import * as grpc from '@grpc/grpc-js';
 import { connect, Contract, Identity, Signer, signers } from '@hyperledger/fabric-gateway';
 
 
-export const GATEWAY_USER = process.env.GATEWAY_USER
-if (!GATEWAY_USER) {
-  console.error('GATEWAY_USER is required (must name a pre-enrolled identity under IDENTITIES_DIR)');
-  process.exit(1);
+export const GATEWAY_USER = process.env.GATEWAY_USER;
+
+export function requireGatewayUser(): string {
+  if (!GATEWAY_USER) {
+    console.error('GATEWAY_USER is required (must name a pre-enrolled identity under IDENTITIES_DIR)');
+    process.exit(1);
+  }
+  return GATEWAY_USER;
 }
+
 const CHANNEL_NAME = process.env.CHANNEL_NAME || 'mychannel';
 const CHAINCODE_NAME = process.env.CHAINCODE_NAME || 'marketplace';
 const MSP_ID = process.env.MSP_ID || 'Org1MSP';
 const PEER_ENDPOINT = process.env.PEER_ENDPOINT || 'localhost:7051';
 const PEER_HOST_ALIAS = process.env.PEER_HOST_ALIAS || 'peer0.org1.example.com';
 
-const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const IDENTITIES_DIR = process.env.IDENTITIES_DIR || path.join(__dirname, '..', 'identities');
+export const REPO_ROOT = path.resolve(__dirname, '..', '..');
+export const IDENTITIES_DIR = process.env.IDENTITIES_DIR || path.join(__dirname, '..', 'identities');
 const PEER_TLS_CERT_PATH =
   process.env.PEER_TLS_CERT_PATH ||
   path.join(

@@ -1,10 +1,9 @@
 import { GatewayError } from '@hyperledger/fabric-gateway';
 import { NextFunction, Request, RequestHandler, Response } from 'express';
-import { GATEWAY_USER } from '../fabric';
+import { requireGatewayUser } from '../fabric';
 
-/** Reads and validates the X-Identity header selecting which pre-enrolled identity to act as. */
-export function requireIdentity(req: Request) {
-  return GATEWAY_USER;
+export function requireIdentity(_req: Request): string {
+  return requireGatewayUser();
 }
 
 export class HttpError extends Error {

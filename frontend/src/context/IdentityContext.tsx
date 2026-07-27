@@ -1,7 +1,5 @@
-import { createContext, ReactNode, useContext, useState } from 'react';
+import { createContext, ReactNode, useContext } from 'react';
 import { Identity } from '../api/types';
-
-const IDENTITY = import.meta.env.VITE_USER_ID
 
 interface IdentityContextValue {
   identity: Identity;
@@ -9,8 +7,12 @@ interface IdentityContextValue {
 
 const IdentityContext = createContext<IdentityContextValue | undefined>(undefined);
 
-export function IdentityProvider({ children }: { children: ReactNode }) {
-  const [identity] = useState<Identity>(IDENTITY);
+interface IdentityProviderProps {
+  identity: Identity;
+  children: ReactNode;
+}
+
+export function IdentityProvider({ identity, children }: IdentityProviderProps) {
   return (
     <IdentityContext.Provider value={{ identity }}>
       {children}

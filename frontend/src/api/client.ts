@@ -9,7 +9,17 @@ import {
   User,
 } from './types';
 
-const BASE_URL = import.meta.env.VITE_GATEWAY_URL || 'http://localhost:3000';
+const BASE_URL = import.meta.env.VITE_GATEWAY_URL || '';
+
+export const setupApi = {
+  status: () => fetch(`${BASE_URL}/setup/status`).then(r => r.json()),
+  register: (username: string) =>
+    fetch(`${BASE_URL}/setup/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    }),
+};
 
 async function request<T>(
   identity: Identity,

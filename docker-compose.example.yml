@@ -1,0 +1,84 @@
+# Template for running a FEW cars locally side by side -- not a fleet
+# orchestrator (a real fleet wouldn't share one compose file/host at all).
+# As written this is for local smoke-testing against this repo's own
+# test-network: PEER_ENDPOINT/CA_ENDPOINT are set to "localhost" because
+# that's the hostname the test-network's self-signed certs are actually
+# issued for (see CA_TLS_CERT_PATH below) -- TLS verification fails
+# against any other hostname, even one that resolves to the same machine.
+# `extra_hosts` below points that in-container "localhost" at the real
+# host machine via Docker's host-gateway (needed on Docker Desktop, whose
+# containers run inside a VM and don't share the host's loopback the way
+# plain `network_mode: host` would on a native Linux Docker Engine).
+#
+# For a REAL car deployment: remove `extra_hosts`, and point
+# PEER_ENDPOINT/CA_ENDPOINT/*_TLS_CERT_PATH at that network's real,
+# reachable address and certs instead -- see
+# CONTAINER_PROVISIONING_ADDENDUM.md. There's no "localhost" trick to
+# replicate there; a real network's cert is issued for its real hostname.
+#
+# Before first boot, seed EACH car's named volume with its OWN copy of the
+# one-time carregistrar credential (never baked into the image -- see "The
+# identity split" in the addendum). The source under gateway/identities/
+# is never modified, only the copy inside each volume is consumed+deleted,
+# so this is safe to repeat per car:
+#
+#   for n in 1 2; do
+#     docker volume create car-${n}-identity
+#     docker run --rm \
+#       -v car-${n}-identity:/data \
+#       -v "$(pwd)/gateway/identities/carregistrar:/src:ro" \
+#       alpine cp -r /src /data/carregistrar
+#   done
+#
+# Then: docker compose -f docker-compose.example.yml up --build
+# car-1 -> http://localhost:3000, car-2 -> http://localhost:3001
+#
+# To add a car-3: copy the car-2 block, bump every "2" to "3" (service
+# name, host port, volume name), and seed car-3-identity the same way.
+
+services:
+  car-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "localhost:host-gateway"
+    environment:
+      IDENTITIES_DIR: /app/gateway/identities
+      PORT: 3000
+      PEER_ENDPOINT: localhost:7051
+      PEER_TLS_CERT_PATH: /fabric-samples-organizations/peerOrganizations/org1.example.com/tlsca/tlsca.org1.example.com-cert.pem
+      CA_ENDPOINT: localhost:7054
+      CA_TLS_CERT_PATH: /fabric-samples-organizations/fabric-ca/org1/ca-cert.pem
+    volumes:
+      - car-1-identity:/app/gateway/identities
+      - ./fabric-samples/test-network/organizations:/fabric-samples-organizations:ro
+
+  car-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    extra_hosts:
+      - "localhost:host-gateway"
+    environment:
+      IDENTITIES_DIR: /app/gateway/identities
+      PORT: 3001
+      PEER_ENDPOINT: localhost:7051
+      PEER_TLS_CERT_PATH: /fabric-samples-organizations/peerOrganizations/org1.example.com/tlsca/tlsca.org1.example.com-cert.pem
+      CA_ENDPOINT: localhost:7054
+      CA_TLS_CERT_PATH: /fabric-samples-organizations/fabric-ca/org1/ca-cert.pem
+    volumes:
+      - car-2-identity:/app/gateway/identities
+      - ./fabric-samples/test-network/organizations:/fabric-samples-organizations:ro
+
+volumes:
+  car-1-identity:
+    external: true
+  car-2-identity:
+    external: true

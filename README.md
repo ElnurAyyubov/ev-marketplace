@@ -47,7 +47,7 @@ not reopen or reverse settlement.
   ./install-fabric.sh docker binary samples
   ```
 
-## Running the demo
+## Running the demo (from a clean checkout)
 
 ```bash
 # 1. Bring up the Fabric test-network (2 orgs, CouchDB, channel "mychannel")
@@ -56,8 +56,22 @@ not reopen or reverse settlement.
 # 2. Deploy the marketplace chaincode (Java; builds via the Gradle wrapper)
 ./network/deployCC.sh
 
-# 3. Bootstrap the 'admin' identity (one-time; it's the registrar every
-#    other identity gets enrolled through) — see "Identities" below.
+# 3. Bootstrap identities (one-time). See "Identities" below for what each
+#    one is and why they're separate; this is just the commands.
+export PATH=$PATH:$(pwd)/fabric-samples/bin
+
+#    admin: the CA's own bootstrap identity, and the registrar every other
+#    identity below gets enrolled through.
+fabric-ca-client enroll -u https://admin:adminpw@localhost:7054 --caname ca-org1 \
+  -M "$(pwd)/gateway/identities/admin/msp" \
+  --tls.certfiles "$(pwd)/fabric-samples/test-network/organizations/fabric-ca/org1/ca-cert.pem"
+
+#    minteradmin: the only identity chaincode allows to mint tokens (faucet).
+./scripts/enroll-identity.sh minteradmin
+
+#    carregistrar: scoped CA registrar used by self-provisioning containers
+#    (skip this if you're only using run-user.sh, not Docker).
+./scripts/enroll-car-registrar.sh
 
 # 4. Launch a dedicated gateway + frontend pair per user. Each call
 #    auto-enrolls the username the first time it's used, then starts both,
@@ -65,13 +79,22 @@ not reopen or reverse settlement.
 ./scripts/run-user.sh alice     3001 5174   # terminal 1
 ./scripts/run-user.sh provider1 3002 5175   # terminal 2, another user
 
-# 5. Start one (or more) simulated smart chargers — see charger-sim/README.md.
+# 5. Mint alice some balance to actually reserve/pay for anything:
+./scripts/faucet.sh alice 500
+
+# 6. Start one (or more) simulated smart chargers — see charger-sim/README.md.
 #    A charger first needs its own enrolled identity (separate from the
 #    on-ledger RegisterCharger call made from a provider owner's frontend):
 ./scripts/enroll-charger.sh charger1
 cd charger-sim && npm install
 CHARGER_ID=charger1 ADMIN_PORT=4001 npm run dev
 ```
+
+Steps 4-6 are the local-dev path (`run-user.sh`, one process per user on your
+own machine). For installing on a physical device that provisions its own
+identity on first boot instead, see "Running as a self-provisioning
+container" below — it only needs steps 1-3 first (`carregistrar` in
+particular; skip enrolling any per-user identity by hand).
 
 Tear down with `./network/down.sh`. Containers can also stop independently
 across a host restart/sleep — the Fabric CA containers in particular have no
@@ -109,13 +132,35 @@ fabric-ca-client enroll -u https://admin:adminpw@localhost:7054 --caname ca-org1
   --tls.certfiles "$(pwd)/fabric-samples/test-network/organizations/fabric-ca/org1/ca-cert.pem"
 ```
 
-`admin` is also the only identity allowed to mint tokens (chaincode-enforced
-in `SmartContract.java`'s `Mint`/`ResetMarketplaceData`), so there's no
-faucet button in any frontend — mint from the CLI instead, which connects
-directly as `admin` without needing any gateway running:
-```bash
-./scripts/faucet.sh alice 500
-```
+Minting and CA registration are deliberately separate privileges, held by
+two different identities, neither of which is `admin` itself:
+
+- **`minteradmin`** is the only identity allowed to mint tokens
+  (chaincode-enforced in `SmartContract.java`'s `Mint`/
+  `ResetMarketplaceData`, checking `Constants.ADMIN_IDENTITY`). It has no
+  special CA privileges — enroll it like any ordinary identity, with no
+  gateway/frontend needed afterwards:
+  ```bash
+  ./scripts/enroll-identity.sh minteradmin
+  ```
+  There's no faucet button in any frontend — mint from the CLI instead,
+  which connects directly as `minteradmin` without needing any gateway
+  running:
+  ```bash
+  ./scripts/faucet.sh alice 500
+  ```
+- **`carregistrar`** (`./scripts/enroll-car-registrar.sh`) can *only*
+  register new client identities against the CA (enrolled with the CA
+  attribute `hf.Registrar.Roles=client`) — it has no chaincode-level power
+  at all. This is the identity meant for self-provisioning devices (see
+  "Running as a self-provisioning container" below): delivered to a
+  device out-of-band, consumed once to register that device's chosen
+  username, then deleted from it.
+
+`admin` still exists as the CA's own root registrar, used only to create
+`minteradmin`/`carregistrar`/regular usernames — see
+`CONTAINER_PROVISIONING_ADDENDUM.md` "The identity split" for the full
+reasoning.
 
 **Chargers** are a separate case. Registering one from a provider owner's
 frontend (`Provider Owner View` → register charger) only creates the
@@ -131,6 +176,32 @@ on-ledger:
 The chaincode derives every caller's identity from their certificate's
 CommonName, so on-chain a user or charger simply shows up as whatever name
 you passed to `run-user.sh` / `enroll-charger.sh`.
+
+## Running as a self-provisioning container
+
+`scripts/run-user.sh` is for local dev, where you already know the
+username up front. For installing on a physical device ("a car") that
+should self-register the first time someone uses it, one generic image
+(`Dockerfile`, repo root) serves the gateway and the built frontend on a
+single port, and provisions itself on first boot instead of taking a
+username as a launch argument. Full design and reasoning:
+`CONTAINER_PROVISIONING_ADDENDUM.md`. Quick version:
+
+1. One-time, on your machine: enroll the device registrar credential —
+   `./scripts/enroll-car-registrar.sh` (see "Identities" above).
+2. Per device: create a persistent volume and seed it with a *copy* of
+   that credential (never baked into the image — see
+   `docker-compose.example.yml`'s header comment for the exact commands).
+3. `docker compose -f docker-compose.example.yml up --build` (that example
+   file targets this repo's own local test-network; point
+   `PEER_ENDPOINT`/`CA_ENDPOINT`/`*_TLS_CERT_PATH` at a real network for an
+   actual deployment).
+4. Open the device's frontend. First boot shows a "register this device"
+   screen; the username entered there is enrolled, the one-time credential
+   is deleted from the device's volume, and the container restarts into
+   the normal single-tenant gateway — from then on indistinguishable from
+   a `run-user.sh` instance, except the identity was chosen on-device
+   rather than passed on a command line.
 
 ## Demo loop
 
@@ -220,7 +291,3 @@ with:
 ```bash
 peer lifecycle chaincode querycommitted --channelID mychannel --name marketplace
 ```
-
-to run the charger:
-
-curl -X POST http://localhost:4001/sim/plugin -H 'Content-Type: application/json' -d '{"reservationId": ""}'
