@@ -6,12 +6,14 @@ import { MyReservationsPage } from './pages/MyReservationsPage';
 import { ProviderDetailPage } from './pages/ProviderDetailPage';
 import { ProviderOwnerPage } from './pages/ProviderOwnerPage';
 import { RegisterPage } from './pages/RegisterPage';
+import { TripPlannerPage } from './pages/TripPlannerPage';
 
-type Tab = 'register' | 'marketplace' | 'create-provider' | 'my-reservations' | 'owner';
+type Tab = 'register' | 'marketplace' | 'trip-planner' | 'create-provider' | 'my-reservations' | 'owner';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'register', label: 'Register User' },
   { id: 'marketplace', label: 'Marketplace' },
+  { id: 'trip-planner', label: 'Trip Planner' },
   { id: 'create-provider', label: 'Create Provider' },
   { id: 'my-reservations', label: 'My Reservations' },
   { id: 'owner', label: 'Provider Owner View' },
@@ -44,7 +46,7 @@ export default function App() {
       {tab === 'create-provider' && <CreateProviderPage />}
       {tab === 'my-reservations' && <MyReservationsPage />}
       {tab === 'owner' && <ProviderOwnerPage />}
-      {tab === 'marketplace' &&
+      {(tab === 'marketplace' || tab === 'trip-planner') &&
         (selectedProviderId ? (
           <ProviderDetailPage
             providerId={selectedProviderId}
@@ -53,8 +55,10 @@ export default function App() {
               /* reservation created; visible under My Reservations */
             }}
           />
-        ) : (
+        ) : tab === 'marketplace' ? (
           <MarketplacePage onSelectProvider={setSelectedProviderId} />
+        ) : (
+          <TripPlannerPage onSelectProvider={setSelectedProviderId} />
         ))}
     </div>
   );

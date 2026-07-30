@@ -13,6 +13,7 @@ export function MarketplacePage({ onSelectProvider }: Props) {
   const [type, setType] = useState('');
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
+  const [approvalRequired, setApprovalRequired] = useState<'' | 'true' | 'false'>('');
   const [useProximity, setUseProximity] = useState(false);
   const [lat, setLat] = useState(40.73);
   const [lng, setLng] = useState(-73.935);
@@ -22,13 +23,26 @@ export function MarketplacePage({ onSelectProvider }: Props) {
   const [nlQuery, setNlQuery] = useState('');
   const [nlLoading, setNlLoading] = useState(false);
 
-  const search = async () => {
+  // Accepts overrides so searchNl() can run a query against freshly-parsed
+  // filter values without waiting on the setState calls that populate the
+  // visible inputs to land first.
+  const search = async (overrides?: {
+    type?: string;
+    minPrice?: string;
+    maxPrice?: string;
+    approvalRequired?: '' | 'true' | 'false';
+  }) => {
+    const t = overrides?.type ?? type;
+    const minP = overrides?.minPrice ?? minPrice;
+    const maxP = overrides?.maxPrice ?? maxPrice;
+    const appr = overrides?.approvalRequired ?? approvalRequired;
     setError(null);
     try {
       const results = await api.queryProviders(identity, {
-        type: type || undefined,
-        minPrice: minPrice ? Number(minPrice) : undefined,
-        maxPrice: maxPrice ? Number(maxPrice) : undefined,
+        type: t || undefined,
+        minPrice: minP ? Number(minP) : undefined,
+        maxPrice: maxP ? Number(maxP) : undefined,
+        approvalRequired: appr === '' ? undefined : appr === 'true',
         lat: useProximity ? lat : undefined,
         lng: useProximity ? lng : undefined,
         radiusKm: useProximity ? radiusKm : undefined,
@@ -39,17 +53,33 @@ export function MarketplacePage({ onSelectProvider }: Props) {
     }
   };
 
+  // Runs the prompt through Ollama to translate it into filter values, then
+  // populates the same Type/Price/Approval inputs below (so the user can see
+  // and adjust what was understood) and runs the normal deterministic search
+  // with those values, instead of having the LLM filter results itself.
   const searchNl = async () => {
     if (!nlQuery.trim()) return;
     setError(null);
     setNlLoading(true);
     try {
-      const results = await api.searchProvidersNl(
-        identity,
-        nlQuery,
-        useProximity ? { lat, lng, radiusKm } : undefined
-      );
-      setProviders(results);
+      const { filters } = await api.parseNlFilters(identity, nlQuery);
+      const nextType = filters.type ?? '';
+      const nextMinPrice = filters.minPrice !== undefined ? String(filters.minPrice) : '';
+      const nextMaxPrice = filters.maxPrice !== undefined ? String(filters.maxPrice) : '';
+      const nextApproval: '' | 'true' | 'false' =
+        filters.approvalRequired === undefined ? '' : filters.approvalRequired ? 'true' : 'false';
+
+      setType(nextType);
+      setMinPrice(nextMinPrice);
+      setMaxPrice(nextMaxPrice);
+      setApprovalRequired(nextApproval);
+
+      await search({
+        type: nextType,
+        minPrice: nextMinPrice,
+        maxPrice: nextMaxPrice,
+        approvalRequired: nextApproval,
+      });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -99,6 +129,17 @@ export function MarketplacePage({ onSelectProvider }: Props) {
           <label>Max price</label>
           <input value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} type="number" />
         </div>
+        <div className="field">
+          <label>Approval</label>
+          <select
+            value={approvalRequired}
+            onChange={(e) => setApprovalRequired(e.target.value as '' | 'true' | 'false')}
+          >
+            <option value="">Any</option>
+            <option value="false">No approval required</option>
+            <option value="true">Approval required</option>
+          </select>
+        </div>
       </div>
 
       <div className="field">
@@ -132,7 +173,7 @@ export function MarketplacePage({ onSelectProvider }: Props) {
         </div>
       )}
 
-      <button onClick={search}>Search</button>
+      <button onClick={() => search()}>Search</button>
       {error && <p className="error">{error}</p>}
 
       <h3>Results ({providers.length})</h3>

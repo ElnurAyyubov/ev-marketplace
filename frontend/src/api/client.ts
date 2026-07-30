@@ -2,10 +2,12 @@ import {
   Charger,
   ChargingProvider,
   Identity,
+  PlanConstraints,
   Reading,
   Reservation,
   Session,
   Slot,
+  TripPlan,
   User,
 } from './types';
 
@@ -71,6 +73,7 @@ export const api = {
       type?: string;
       minPrice?: number;
       maxPrice?: number;
+      approvalRequired?: boolean;
       lat?: number;
       lng?: number;
       radiusKm?: number;
@@ -89,11 +92,19 @@ export const api = {
     );
   },
 
-  searchProvidersNl: (
-    identity: Identity,
-    query: string,
-    center?: { lat: number; lng: number; radiusKm: number }
-  ) => request<ChargingProvider[]>(identity, 'POST', '/search/nl', { query, center }),
+  // Translates a free-text query into filter values (type/minPrice/maxPrice/
+  // approvalRequired) matching the marketplace page's own filter inputs. It
+  // does not return providers directly — the caller applies the returned
+  // filters via queryProviders.
+  parseNlFilters: (identity: Identity, query: string) =>
+    request<{
+      filters: {
+        type?: 'Commercial' | 'Residential';
+        minPrice?: number;
+        maxPrice?: number;
+        approvalRequired?: boolean;
+      };
+    }>(identity, 'POST', '/search/nl', { query }),
 
   getProvider: (identity: Identity, providerId: string) =>
     request<ChargingProvider>(identity, 'GET', `/providers/${providerId}`),
@@ -159,4 +170,18 @@ export const api = {
 
   faucet: (identity: Identity, userId: string, amount: number) =>
     request<void>(identity, 'POST', '/faucet', { userId, amount }),
+
+  // Trip planner (read-only, advisory -- see TRIP_PLANNER_ADDENDUM.md).
+  planTrip: (
+    identity: Identity,
+    payload: {
+      origin: { lat: number; lng: number } | string;
+      destination: { lat: number; lng: number } | string;
+      maxLegKm?: number;
+      constraints?: PlanConstraints;
+    }
+  ) => request<TripPlan>(identity, 'POST', '/trip/plan', payload),
+
+  planTripNl: (identity: Identity, query: string) =>
+    request<{ plan: TripPlan; narration?: string }>(identity, 'POST', '/trip/plan/nl', { query }),
 };

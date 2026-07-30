@@ -93,3 +93,51 @@ export interface Reading {
   cumulativeWh: number;
   timestamp: number;
 }
+
+// Trip planner (TRIP_PLANNER_ADDENDUM.md) -- a read-only, advisory feature.
+// These mirror gateway/src/tripPlanner/types.ts exactly.
+export interface LatLng {
+  lat: number;
+  lng: number;
+}
+
+export interface Waypoint extends LatLng {
+  label?: string;
+}
+
+export interface PlanConstraints {
+  providerType?: ProviderType;
+  maxPricePerkWh?: number;
+  approvalRequired?: boolean;
+  connectorTypes?: string[];
+}
+
+export interface PlannedStop {
+  providerId: string;
+  location: LatLng;
+  providerType: ProviderType;
+  pricePerkWh: number;
+  approvalRequired: boolean;
+  legDistanceKm: number;
+}
+
+export type TripPlanStatus = 'feasible' | 'no_feasible_route';
+
+export interface TripPlan {
+  origin: Waypoint;
+  destination: Waypoint;
+  constraints: PlanConstraints;
+  maxLegKm: number;
+
+  status: TripPlanStatus;
+  reason?: string;
+  stops: PlannedStop[];
+  finalLegKm: number;
+
+  totalDistanceKm: number;
+  stopCount: number;
+
+  roadGeometry?: LatLng[];
+  roadDistanceKm?: number;
+  etaMinutes?: number;
+}

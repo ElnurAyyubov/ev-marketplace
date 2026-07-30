@@ -66,10 +66,8 @@ providersRouter.get(
   '/providers',
   asyncHandler(async (req, res) => {
     const identity = requireIdentity(req);
-    const { type, minPrice, maxPrice, lat, lng, radiusKm, ownerId } = req.query as Record<
-      string,
-      string | undefined
-    >;
+    const { type, minPrice, maxPrice, lat, lng, radiusKm, ownerId, approvalRequired } =
+      req.query as Record<string, string | undefined>;
 
     const selector: Record<string, unknown> = {};
     if (type) selector.providerType = type;
@@ -77,6 +75,7 @@ providersRouter.get(
     // provider-owner view ("my providers"); QueryProviders already accepts
     // an arbitrary Mango selector so this is a passthrough, not a chaincode change.
     if (ownerId) selector.ownerId = ownerId;
+    if (approvalRequired !== undefined) selector.approvalRequired = approvalRequired === 'true';
     if (minPrice !== undefined || maxPrice !== undefined) {
       const priceRange: Record<string, number> = {};
       if (minPrice !== undefined) priceRange.$gte = Number(minPrice);
