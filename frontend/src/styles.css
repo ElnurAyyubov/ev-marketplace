@@ -120,6 +120,11 @@ button.secondary {
   color: #1a2b3c;
 }
 
+button.danger {
+  background: #b00020;
+  border-color: #b00020;
+}
+
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -160,6 +165,21 @@ button:disabled {
 
 .badge.CANCELLED,
 .badge.EXPIRED {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.badge.provider-Active {
+  background: #d4edda;
+  color: #155724;
+}
+
+.badge.provider-Inactive {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.badge.provider-Deleted {
   background: #f8d7da;
   color: #721c24;
 }

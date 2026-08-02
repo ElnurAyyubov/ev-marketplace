@@ -1,7 +1,7 @@
 export type Identity = string;
 
 export type ProviderType = 'Commercial' | 'Residential';
-export type ProviderStatus = 'Active' | 'Inactive';
+export type ProviderStatus = 'Active' | 'Inactive' | 'Deleted';
 
 export interface User {
   docType: 'user';

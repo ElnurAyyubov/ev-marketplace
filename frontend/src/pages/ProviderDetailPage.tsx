@@ -74,6 +74,12 @@ export function ProviderDetailPage({ providerId, onBack, onReserved }: Props) {
           <em>This provider requires owner approval before a reservation is confirmed.</em>
         </p>
       )}
+      {provider.status !== 'Active' && (
+        <p className="error">
+          This station is {provider.status === 'Deleted' ? 'no longer available' : 'currently closed'} and can't be
+          reserved.
+        </p>
+      )}
 
       <h3>Slots</h3>
       <div className="slot-grid">
@@ -100,7 +106,7 @@ export function ProviderDetailPage({ providerId, onBack, onReserved }: Props) {
         />
       </div>
 
-      <button onClick={handleReserve} disabled={!selectedSlot}>
+      <button onClick={handleReserve} disabled={!selectedSlot || provider.status !== 'Active'}>
         Reserve as {identity}
       </button>
 
