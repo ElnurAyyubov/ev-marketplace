@@ -110,6 +110,9 @@ export const api = {
   updateProviderStatus: (identity: Identity, providerId: string, status: string) =>
     request<void>(identity, 'PATCH', `/providers/${providerId}/status`, { status }),
 
+  deleteProvider: (identity: Identity, providerId: string) =>
+    request<void>(identity, 'DELETE', `/providers/${providerId}`),
+
   getSlots: (identity: Identity, providerId: string) =>
     request<Slot[]>(identity, 'GET', `/providers/${providerId}/slots`),
 

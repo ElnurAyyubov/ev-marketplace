@@ -38,6 +38,8 @@ export function ProviderOwnerPage() {
     setChargerSlotIndex(unbound ? Number(unbound.slotId) : null);
   };
 
+  const selectedProvider = providers.find((p) => p.providerId === selectedProviderId) ?? null;
+
   const loadReservations = async (providerId: string) => {
     setError(null);
     try {
@@ -86,6 +88,28 @@ export function ProviderOwnerPage() {
     }
   };
 
+  const handleToggleStatus = async () => {
+    if (!selectedProviderId || !selectedProvider) return;
+    const nextStatus = selectedProvider.status === 'Active' ? 'Inactive' : 'Active';
+    try {
+      await api.updateProviderStatus(identity, selectedProviderId, nextStatus);
+      await loadProviders();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selectedProviderId) return;
+    if (!window.confirm('Permanently delete this station? This cannot be undone.')) return;
+    try {
+      await api.deleteProvider(identity, selectedProviderId);
+      await loadProviders();
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  };
+
   const handleRegisterCharger = async () => {
     if (!selectedProviderId || chargerSlotIndex === null) return;
     setRegisterBusy(true);
@@ -124,6 +148,26 @@ export function ProviderOwnerPage() {
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {selectedProvider && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+          <span className={`badge provider-${selectedProvider.status}`}>{selectedProvider.status}</span>
+          {selectedProvider.status !== 'Deleted' ? (
+            <>
+              <button onClick={handleToggleStatus}>
+                {selectedProvider.status === 'Active' ? 'Close station' : 'Reopen station'}
+              </button>
+              <button className="danger" onClick={handleDelete}>
+                Delete station
+              </button>
+            </>
+          ) : (
+            <p style={{ color: '#666', fontStyle: 'italic', margin: 0 }}>
+              This station has been permanently deleted.
+            </p>
+          )}
         </div>
       )}
 

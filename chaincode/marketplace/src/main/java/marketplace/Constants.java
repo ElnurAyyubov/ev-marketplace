@@ -26,6 +26,7 @@ public final class Constants {
 
     public static final String PROVIDER_STATUS_ACTIVE = "Active";
     public static final String PROVIDER_STATUS_INACTIVE = "Inactive";
+    public static final String PROVIDER_STATUS_DELETED = "Deleted";
 
     // Reservation state machine states.
     public static final String RESERVATION_STATE_REQUESTED = "REQUESTED";

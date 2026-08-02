@@ -4,6 +4,7 @@
 package marketplace;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -142,7 +143,32 @@ public final class SmartContract implements ContractInterface {
         if (!provider.getOwnerId().equals(callerId)) {
             throw new ChaincodeException("only the provider owner may update its status");
         }
+        if (Constants.PROVIDER_STATUS_DELETED.equals(provider.getStatus())) {
+            throw new ChaincodeException("provider " + providerId + " has been deleted");
+        }
         provider.setStatus(status);
+        ChaincodeUtil.putJSON(ctx, key, provider);
+    }
+
+    /** Permanently deletes a provider (soft-delete via terminal status), owner-only, blocked while any reservation is open. */
+    @Transaction(intent = Transaction.TYPE.SUBMIT)
+    public void DeleteProvider(final Context ctx, final String providerId) {
+        String callerId = ChaincodeUtil.getCallerID(ctx);
+        String key = ChaincodeUtil.providerKey(ctx, providerId);
+        ChargingProvider provider = GetProvider(ctx, providerId);
+
+        if (!provider.getOwnerId().equals(callerId)) {
+            throw new ChaincodeException("only the provider owner may delete this provider");
+        }
+        if (Constants.PROVIDER_STATUS_DELETED.equals(provider.getStatus())) {
+            throw new ChaincodeException("provider " + providerId + " is already deleted");
+        }
+        if (hasOpenReservations(ctx, providerId)) {
+            throw new ChaincodeException(
+                    "provider " + providerId + " has active or pending reservations and cannot be deleted");
+        }
+
+        provider.setStatus(Constants.PROVIDER_STATUS_DELETED);
         ChaincodeUtil.putJSON(ctx, key, provider);
     }
 
@@ -526,6 +552,27 @@ public final class SmartContract implements ContractInterface {
             throw new ChaincodeException("failed to execute rich query: " + e.getMessage());
         }
         return ChaincodeUtil.toJSON(reservations);
+    }
+
+    /** True if a provider has any reservation in a non-terminal state (REQUESTED/CONFIRMED/ACTIVE). */
+    private boolean hasOpenReservations(final Context ctx, final String providerId) {
+        Map<String, Object> selector = new HashMap<>();
+        selector.put("docType", Constants.DOC_TYPE_RESERVATION);
+        selector.put("providerId", providerId);
+        Map<String, Object> stateFilter = new HashMap<>();
+        stateFilter.put("$in", Arrays.asList(
+                Constants.RESERVATION_STATE_REQUESTED,
+                Constants.RESERVATION_STATE_CONFIRMED,
+                Constants.RESERVATION_STATE_ACTIVE));
+        selector.put("state", stateFilter);
+        Map<String, Object> query = new HashMap<>();
+        query.put("selector", selector);
+
+        try (QueryResultsIterator<KeyValue> results = ctx.getStub().getQueryResult(ChaincodeUtil.toJSON(query))) {
+            return results.iterator().hasNext();
+        } catch (RuntimeException e) {
+            throw new ChaincodeException("failed to execute rich query: " + e.getMessage());
+        }
     }
 
     /** Marks a slot unoccupied and bumps the provider's available-slot counter back up. */

@@ -75,6 +75,10 @@ providersRouter.get(
     // provider-owner view ("my providers"); QueryProviders already accepts
     // an arbitrary Mango selector so this is a passthrough, not a chaincode change.
     if (ownerId) selector.ownerId = ownerId;
+    // Public/marketplace-style queries (no ownerId) only ever want bookable
+    // stations; the owner's own "my providers" view needs to see Inactive/
+    // Deleted ones too, so it's exempt.
+    else selector.status = 'Active';
     if (approvalRequired !== undefined) selector.approvalRequired = approvalRequired === 'true';
     if (minPrice !== undefined || maxPrice !== undefined) {
       const priceRange: Record<string, number> = {};
@@ -129,6 +133,17 @@ providersRouter.patch(
 
     await withContract(identity, (contract) =>
       contract.submitTransaction('UpdateProviderStatus', req.params.id, status)
+    );
+    res.status(204).send();
+  })
+);
+
+providersRouter.delete(
+  '/providers/:id',
+  asyncHandler(async (req, res) => {
+    const identity = requireIdentity(req);
+    await withContract(identity, (contract) =>
+      contract.submitTransaction('DeleteProvider', req.params.id)
     );
     res.status(204).send();
   })
