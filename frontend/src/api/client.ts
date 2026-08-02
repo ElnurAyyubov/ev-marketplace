@@ -47,8 +47,6 @@ async function request<T>(
 }
 
 export const api = {
-  registerUser: (identity: Identity, name: string) =>
-    request<User>(identity, 'POST', '/users/register', { name }),
   getUser: (identity: Identity, userId: string) =>
     request<User>(identity, 'GET', `/users/${userId}`),
 

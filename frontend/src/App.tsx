@@ -5,13 +5,11 @@ import { MarketplacePage } from './pages/MarketplacePage';
 import { MyReservationsPage } from './pages/MyReservationsPage';
 import { ProviderDetailPage } from './pages/ProviderDetailPage';
 import { ProviderOwnerPage } from './pages/ProviderOwnerPage';
-import { RegisterPage } from './pages/RegisterPage';
 import { TripPlannerPage } from './pages/TripPlannerPage';
 
-type Tab = 'register' | 'marketplace' | 'trip-planner' | 'create-provider' | 'my-reservations' | 'owner';
+type Tab = 'marketplace' | 'trip-planner' | 'create-provider' | 'my-reservations' | 'owner';
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'register', label: 'Register User' },
   { id: 'marketplace', label: 'Marketplace' },
   { id: 'trip-planner', label: 'Trip Planner' },
   { id: 'create-provider', label: 'Create Provider' },
@@ -42,7 +40,6 @@ export default function App() {
         ))}
       </div>
 
-      {tab === 'register' && <RegisterPage />}
       {tab === 'create-provider' && <CreateProviderPage />}
       {tab === 'my-reservations' && <MyReservationsPage />}
       {tab === 'owner' && <ProviderOwnerPage />}
