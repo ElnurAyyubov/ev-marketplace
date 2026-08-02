@@ -31,11 +31,13 @@ export function MarketplacePage({ onSelectProvider }: Props) {
     minPrice?: string;
     maxPrice?: string;
     approvalRequired?: '' | 'true' | 'false';
+    useProximity?: boolean;
   }) => {
     const t = overrides?.type ?? type;
     const minP = overrides?.minPrice ?? minPrice;
     const maxP = overrides?.maxPrice ?? maxPrice;
     const appr = overrides?.approvalRequired ?? approvalRequired;
+    const proximity = overrides?.useProximity ?? useProximity;
     setError(null);
     try {
       const results = await api.queryProviders(identity, {
@@ -43,9 +45,9 @@ export function MarketplacePage({ onSelectProvider }: Props) {
         minPrice: minP ? Number(minP) : undefined,
         maxPrice: maxP ? Number(maxP) : undefined,
         approvalRequired: appr === '' ? undefined : appr === 'true',
-        lat: useProximity ? lat : undefined,
-        lng: useProximity ? lng : undefined,
-        radiusKm: useProximity ? radiusKm : undefined,
+        lat: proximity ? lat : undefined,
+        lng: proximity ? lng : undefined,
+        radiusKm: proximity ? radiusKm : undefined,
       });
       setProviders(results);
     } catch (err) {
@@ -91,6 +93,28 @@ export function MarketplacePage({ onSelectProvider }: Props) {
     search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const hasActiveFilters =
+    type !== '' ||
+    minPrice !== '' ||
+    maxPrice !== '' ||
+    approvalRequired !== '' ||
+    useProximity ||
+    nlQuery !== '';
+
+  const clearFilters = () => {
+    setNlQuery('');
+    setType('');
+    setMinPrice('');
+    setMaxPrice('');
+    setApprovalRequired('');
+    setUseProximity(false);
+    setLat(40.73);
+    setLng(-73.935);
+    setRadiusKm(10);
+    setError(null);
+    search({ type: '', minPrice: '', maxPrice: '', approvalRequired: '', useProximity: false });
+  };
 
   return (
     <div className="card">
@@ -173,7 +197,14 @@ export function MarketplacePage({ onSelectProvider }: Props) {
         </div>
       )}
 
-      <button onClick={() => search()}>Search</button>
+      <div className="row">
+        <button onClick={() => search()}>Search</button>
+        {hasActiveFilters && (
+          <button onClick={clearFilters} type="button">
+            Clear filters
+          </button>
+        )}
+      </div>
       {error && <p className="error">{error}</p>}
 
       <h3>Results ({providers.length})</h3>
