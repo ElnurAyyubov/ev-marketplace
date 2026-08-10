@@ -14,10 +14,19 @@ export interface CouchSelector {
   providerType?: 'Commercial' | 'Residential';
   approvalRequired?: boolean;
   pricePerkWh?: { $lte?: number; $gte?: number };
+  // A scalar radius only -- never a coordinate. Per CAR_LOCATION_ADDENDUM.md
+  // section 2.1/9, this must NOT be wired into a QueryProviders bounding box
+  // (that would send the driver's position to the peer). It exists here so
+  // VOICE_INPUT_ADDENDUM.md's parser output goes through the same mandatory
+  // clamp/whitelist as every other model-derived field; callers apply it to
+  // the marketplace's client-side "within X km" filter instead.
+  radiusKm?: number;
 }
 
 const MIN_PRICE = 0;
 const MAX_PRICE = 1_000_000;
+const MIN_RADIUS_KM = 1;
+const MAX_RADIUS_KM = 200;
 
 /**
  * A price of 0, negative, missing, or non-integer means "no constraint" —
@@ -52,6 +61,14 @@ export function sanitizeSelector(raw: unknown): CouchSelector {
     selector.pricePerkWh = {};
     if (lte !== undefined) selector.pricePerkWh.$lte = lte;
     if (gte !== undefined) selector.pricePerkWh.$gte = gte;
+  }
+
+  if (
+    typeof input.radiusKm === 'number' &&
+    Number.isInteger(input.radiusKm) &&
+    input.radiusKm >= MIN_RADIUS_KM
+  ) {
+    selector.radiusKm = Math.min(MAX_RADIUS_KM, input.radiusKm);
   }
 
   return selector;

@@ -4,6 +4,7 @@ import express from 'express';
 import path from 'path';
 import { startReservationExpiryWorker } from './expiryWorker';
 import { chargersRouter } from './routes/chargers';
+import { locationRouter } from './routes/location';
 import { nlSearchRouter } from './routes/nlSearch';
 import { providersRouter } from './routes/providers';
 import { reservationsRouter } from './routes/reservations';
@@ -12,6 +13,7 @@ import { tokenRouter } from './routes/token';
 import { tripPlanRouter } from './routes/tripPlan';
 import { usersRouter } from './routes/users';
 import { errorMiddleware } from './routes/util';
+import { voiceRouter } from './routes/voice';
 import { requireGatewayUser } from './fabric';
 
 const GATEWAY_USER = requireGatewayUser();
@@ -26,7 +28,12 @@ app.get('/setup/status', (_req, res) => res.json({ provisioned: true, identity: 
 
 app.use(usersRouter);
 app.use(providersRouter);
+app.use(locationRouter);
 app.use(nlSearchRouter);
+// VOICE_ENABLED gates the whole route rather than a flag inside it: when
+// false the router is simply never mounted, so Express's own "no matching
+// route" 404 applies -- see gateway/README.md "Voice search".
+if (process.env.VOICE_ENABLED !== 'false') app.use(voiceRouter);
 app.use(chargersRouter);
 app.use(reservationsRouter);
 app.use(sessionsRouter);

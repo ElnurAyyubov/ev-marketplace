@@ -2,6 +2,7 @@ import {
   Charger,
   ChargingProvider,
   Identity,
+  MyLocation,
   PlanConstraints,
   Reading,
   Reservation,
@@ -9,6 +10,7 @@ import {
   Slot,
   TripPlan,
   User,
+  VoiceSearchResult,
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_GATEWAY_URL || '';
@@ -65,6 +67,11 @@ export const api = {
     }
   ) => request<{ providerId: string }>(identity, 'POST', '/providers', payload),
 
+  // CAR_LOCATION_ADDENDUM.md section 2.1: callers on the car-location path
+  // (MarketplacePage's client-side distance filter) must never populate
+  // lat/lng/radiusKm here -- those exist only for the pre-existing
+  // server-side proximity path. Passing them would send the driver's
+  // coordinates to the peer as a query parameter, defeating the invariant.
   queryProviders: (
     identity: Identity,
     filters: {
@@ -103,6 +110,34 @@ export const api = {
         approvalRequired?: boolean;
       };
     }>(identity, 'POST', '/search/nl', { query }),
+
+  // Voice search (VOICE_INPUT_ADDENDUM.md). Returns filters, never results
+  // -- same contract as parseNlFilters, just fed by a recorded clip instead
+  // of typed text. radiusKm is a scalar; per CAR_LOCATION_ADDENDUM.md
+  // section 2.1 the caller must apply it to the marketplace's existing
+  // client-side "within X km" filter, never send it on to queryProviders.
+  parseVoiceFilters: async (identity: Identity, audio: Blob): Promise<VoiceSearchResult> => {
+    const form = new FormData();
+    form.append('audio', audio, 'clip.webm');
+    const res = await fetch(`${BASE_URL}/search/voice`, {
+      method: 'POST',
+      headers: { 'X-Identity': identity },
+      body: form,
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(payload.error || `request failed with status ${res.status}`);
+    }
+    return res.json();
+  },
+
+  // Driver's own off-ledger location (CAR_LOCATION_ADDENDUM.md). Never
+  // touches the chaincode/peer -- the gateway just reads/writes a file on
+  // this identity's own volume.
+  getMyLocation: (identity: Identity) => request<MyLocation>(identity, 'GET', '/me/location'),
+
+  setMyLocation: (identity: Identity, lat: number, lng: number) =>
+    request<{ lat: number; lng: number }>(identity, 'POST', '/me/location', { lat, lng }),
 
   getProvider: (identity: Identity, providerId: string) =>
     request<ChargingProvider>(identity, 'GET', `/providers/${providerId}`),

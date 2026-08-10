@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { PlanConstraints, TripPlan } from '../api/types';
 import { LocationPickerMap } from '../components/LocationPickerMap';
@@ -11,8 +11,8 @@ interface Props {
 
 type EndpointMode = 'text' | 'map';
 
-const DEFAULT_LAT = 40.73;
-const DEFAULT_LNG = -73.935;
+const DEFAULT_LAT = 41.0082;
+const DEFAULT_LNG = 28.9784;
 
 export function TripPlannerPage({ onSelectProvider }: Props) {
   const { identity } = useIdentity();
@@ -35,6 +35,22 @@ export function TripPlannerPage({ onSelectProvider }: Props) {
   const [plan, setPlan] = useState<TripPlan | null>(null);
   const [narration, setNarration] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+
+  // CAR_LOCATION_ADDENDUM.md section 3/L3: pre-fill the origin from the
+  // driver's own off-ledger location, treated as a map pin -- this never
+  // triggers a geocode call for the origin.
+  useEffect(() => {
+    api
+      .getMyLocation(identity)
+      .then((loc) => {
+        setOriginPin({ lat: loc.lat, lng: loc.lng });
+        setOriginMode('map');
+      })
+      .catch(() => {
+        /* best-effort prefill; text/manual-pin entry still works */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const buildConstraints = (): PlanConstraints => ({
     providerType: type ? (type as PlanConstraints['providerType']) : undefined,

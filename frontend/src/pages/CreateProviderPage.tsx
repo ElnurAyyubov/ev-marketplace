@@ -9,8 +9,8 @@ const CONNECTOR_OPTIONS = ['Type2', 'CCS', 'CHAdeMO', 'Tesla'];
 export function CreateProviderPage() {
   const { identity } = useIdentity();
   const [providerType, setProviderType] = useState<ProviderType>('Commercial');
-  const [lat, setLat] = useState(40.7306);
-  const [lng, setLng] = useState(-73.9352);
+  const [lat, setLat] = useState(41.0082);
+  const [lng, setLng] = useState(28.9784);
   const [locationLabel, setLocationLabel] = useState('');
   const [pricePerkWh, setPricePerkWh] = useState(10);
   const [availableEnergy, setAvailableEnergy] = useState(100);

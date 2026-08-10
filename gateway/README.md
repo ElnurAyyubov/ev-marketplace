@@ -39,6 +39,161 @@ treated as "no price constraint" rather than passed through as
 `pricePerkWh: {$lte: 0}` (a real failure mode where a model emits `0` as an
 "unset" placeholder).
 
+## Voice search (`POST /search/voice`)
+
+See `VOICE_INPUT_ADDENDUM.md` at the repo root for the full design. Push-to-talk
+voice input into the marketplace filter controls only — a microphone button on
+`MarketplacePage`, English-only, exactly four extractable fields
+(`providerType`, `approvalRequired`, `maxPricePerkWh`, `radiusKm`). Read-only
+by construction: this endpoint returns `{ transcript, filters, source: 'rules'
+| 'llm', nearbyApplied }`, never providers — same contract as `/search/nl`,
+just fed by a recorded clip.
+
+```
+mic ──► whisper-server (local) ──► transcript (untrusted text)
+                                          │
+                              parseVoiceFilters()  (deterministic, unit-tested)
+                                          │
+                          ┌───────────────┴───────────────┐
+                    matched ≥ 1                     matched = 0
+                          │                                │
+                          │                    existing Ollama NL parse
+                          └───────────────┬────────────────┘
+                                          ▼
+                       { filters } returned to the frontend
+                                          │
+        frontend fills in Type/Price/Approval/Within-km, calls GET /providers
+```
+
+### Two deployment paths for `whisper-server`
+
+whisper.cpp runs as a resident local HTTP server, the same deployment shape
+as Ollama — model held in RAM between requests, `WHISPER_URL` points at it.
+Which one applies depends on how you're running the gateway:
+
+- **`scripts/run-user.sh` (bare host process).** There is no host-level
+  whisper-server unless you start one yourself — see "Host setup" below.
+  `WHISPER_URL` defaults to `http://localhost:8080`.
+- **The self-provisioning car container (`Dockerfile`,
+  `docker-compose.example.yml`).** whisper.cpp is built from source and
+  baked into the image itself (see the `whisper-build` stage in the root
+  `Dockerfile`), and `entrypoint.sh` starts it as a sibling process inside
+  each car's own container, bound to that container's own `127.0.0.1`. **No
+  setup step, no host dependency, nothing to run separately.** This was
+  verified directly during development: with the *host's* whisper-server
+  killed outright, `POST /search/voice` against a running car container
+  (`dapp-car-1-1`) still returned a correct `200` with `source: "rules"` —
+  the container genuinely carries its own complete copy, matching the "one
+  car, one complete copy of everything" model
+  `CONTAINER_PROVISIONING_ADDENDUM.md` is built on. Ollama (NL search, trip
+  planner, and voice's own LLM fallback) deliberately stays a *shared* host
+  service reached via the existing `extra_hosts: "localhost:host-gateway"`
+  trick — baking in a ~1.8 GB LLM per car is a much bigger commitment than
+  this ~150 MB ASR model; see `TECHNICAL_OVERVIEW.md` §19 for the full
+  numbers and reasoning behind drawing the line there.
+  - Image cost: ~150 MB (binary + shared libs + `ggml-base.en.bin`, copied
+    from a `node:20-slim` build stage — matching the runtime stage's glibc
+    is required, a host-built binary is not portable in). RAM cost while
+    running: ~280 MB resident.
+  - `VOICE_ENABLED=false` skips starting it in the container too, saving
+    that RAM/CPU for a car that doesn't want voice search.
+  - Same-container sanity check:
+    `docker exec <car-container> node -e "fetch('http://localhost:8080/inference').then(r=>console.log(r.status))"`
+    should print `404` (a GET against a POST-only route reaching the server
+    counts as reachable), not a connection error.
+
+### Host setup (for `run-user.sh`, or to reproduce the container's build)
+
+Not built or downloaded as part of this repo (the model is ~148 MB and this
+is a dev/demo setup step, same as installing Ollama):
+
+```bash
+git clone https://github.com/ggml-org/whisper.cpp.git
+cd whisper.cpp && cmake -B build && cmake --build build -j4
+./models/download-ggml-model.sh base.en
+sha256sum models/ggml-base.en.bin       # record this below once you've built it
+
+./build/bin/whisper-server -m models/ggml-base.en.bin -t 4 --port 8080 --host 127.0.0.1
+```
+
+- **Model: `ggml-base.en`.** `tiny.en` is faster but materially worse;
+  `small.en` is better but too slow on a CPU-only 4-core.
+- **`ggml-base.en.bin` SHA256:**
+  `a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002`
+  (whisper.cpp commit `8631825d41a2712268813981a9550b04a3f225e5`, downloaded
+  from `https://huggingface.co/ggerganov/whisper.cpp` via
+  `models/download-ggml-model.sh base.en` on 2026-08-07). Re-verify with
+  `sha256sum models/ggml-base.en.bin` if reproducing — see
+  `VOICE_INPUT_ADDENDUM.md` §9.
+- **No GPU, no internet.** Zero network egress. The offline boundary in
+  `TECHNICAL_OVERVIEW.md` §17 is unchanged — Nominatim/OSRM remain the only
+  real internet dependencies, both confined to the trip planner.
+- Grammar-constrained decoding is deliberately not used (`--grammar` is
+  CLI-only, not exposed by `whisper-server`); free transcription plus the
+  deterministic parser is more robust to phrasing variation.
+- `ffmpeg` is a required prerequisite (transcodes the browser's recorded
+  clip to 16kHz mono PCM before it reaches whisper-server) — install it on
+  the host for local dev; the root `Dockerfile` installs it for the
+  container path.
+
+If `whisper-server` isn't reachable, `POST /search/voice` returns a clean
+`502` — same fail-closed rule as `/search/nl`: no error path here ever falls
+through to an unsanitized or unfiltered query (this endpoint never queries
+anything at all; worst case it returns an error and the frontend's existing
+filter state is untouched).
+
+**Running `whisper-server` in the background (host / `run-user.sh` path only
+— the container path starts its own automatically, see above):**
+
+```bash
+cd whisper.cpp
+nohup ./build/bin/whisper-server -m models/ggml-base.en.bin -t 4 --port 8080 --host 127.0.0.1 > /tmp/whisper.log 2>&1 &
+```
+
+`--host 127.0.0.1` is correct here since `run-user.sh` and this
+whisper-server run as plain processes on the same machine, talking over the
+real loopback interface — no container networking involved. (An earlier
+version of this doc had `--host 0.0.0.0` here as a workaround for reaching a
+*host-level* whisper-server from inside a container; that whole class of
+problem doesn't apply anymore now that the container path bakes its own
+whisper-server in — see "Two deployment paths" above.)
+
+### Privacy: radiusKm is a scalar, never a coordinate
+
+The deterministic parser (`src/voice/parseFilters.ts`) applies a
+`VOICE_NEARBY_RADIUS_KM` (default 25) default radius whenever an utterance
+matched something but named no explicit distance — see
+`VOICE_INPUT_ADDENDUM.md` §3 Rule 2. This radius is a **scalar only**.
+
+Per `CAR_LOCATION_ADDENDUM.md` §2.1/§9, the driver's location is never sent
+to a Fabric peer as a query parameter, and server-side bounding-box radius
+filtering driven by the car's position is explicitly out of scope. So unlike
+the addendum's original design (which routed `radiusKm` into a
+`QueryProviders` bounding box), this implementation applies it to the
+marketplace's existing **client-side** "within X km" filter — the same one
+`CAR_LOCATION_ADDENDUM.md` already built. `sanitizeSelector()` still
+whitelists/clamps `radiusKm` (1–200) as defense-in-depth on the parser's own
+output, but nothing in this codebase ever attaches it to a chaincode query.
+If the frontend has no resolved car location yet, the radius is dropped and
+the UI shows a "nearby unavailable — showing all" chip instead of silently
+applying (or silently not applying) a filter.
+
+### Secure-context requirement
+
+`getUserMedia` needs HTTPS or `localhost`. The `run-user.sh` dev path
+(`localhost:5174`) is fine. A container frontend opened from another
+machine by IP will silently have no microphone — the mic button hides
+itself when `navigator.mediaDevices` is undefined rather than throwing.
+
+### Config
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `WHISPER_URL` | `http://localhost:8080` | whisper-server base URL — `localhost`, not `127.0.0.1`, so it resolves correctly whether whisper-server is a plain host process or (in the container path) baked into the same container |
+| `VOICE_NEARBY_RADIUS_KM` | `25` | Rule 2 default radius |
+| `VOICE_MAX_SECONDS` | `15` | hard cap on clip length (enforced by ffmpeg) |
+| `VOICE_ENABLED` | `true` | when `false`, the route is never mounted (`POST /search/voice` 404s) |
+
 ## Trip planner (`POST /trip/plan`, `POST /trip/plan/nl`)
 
 Read-only, advisory routing over the same marketplace data — see

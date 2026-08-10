@@ -247,6 +247,74 @@ terminal/browser tab:
    reading, paying the provider and refunding the driver the remainder.
    No party ever types in a delivered-energy number.
 
+## Driver (car) location
+
+`CAR_LOCATION_ADDENDUM.md` adds a driver/car location, shown as a distinct
+marker on the marketplace map and used for a client-side "within X km"
+distance filter and per-result "N.N km away" labels.
+
+> **Privacy invariant:** the car's location is (1) never written to the
+> ledger, and (2) never sent to a Fabric peer as a query parameter. Distance
+> filtering is computed in the browser, against a providers list fetched
+> using only non-location (type/price) criteria.
+
+**Chosen (runtime) variant:** each single-tenant gateway serves its own
+identity's location from `GET /me/location`, resolved in priority order:
+`gateway/identities/<user>/location.json` (if present) → `USER_LAT`/`USER_LNG`
+env vars → a default city center (Istanbul, `41.0082, 28.9784`). The
+marketplace page reads this at load and lets you move the car (map-click,
+lat/lng inputs, or the browser's Geolocation API); moves persist via
+dev-guarded `POST /me/location`, which — like the faucet — only writes to
+this gateway's own identity volume and never touches the chaincode.
+
+Set a user's location from the terminal (no rebuild needed — reload that
+user's frontend to see it move):
+```bash
+./scripts/set-location.sh alice 41.0082 28.9784
+# or, from a terminal that already has GATEWAY_USER exported for alice's gateway:
+GATEWAY_USER=alice ./scripts/set-location.sh 41.0082 28.9784
+```
+
+**Build-time alternative (max-purity, dev-only, not implemented as the
+primary path):** bake `VITE_USER_LAT`/`VITE_USER_LNG` into the frontend
+build via `run-user.sh` extra args, exactly parallel to `VITE_USER_ID`. The
+gateway would never see the coordinate at all, at the cost of needing a
+rebuild to relocate and no support for the self-provisioning container path.
+
+## Voice search
+
+`VOICE_INPUT_ADDENDUM.md` adds a push-to-talk mic button next to the NL
+search box on `MarketplacePage`. Tap, speak one short utterance (e.g.
+*"residential chargers under thirty within ten km, no approval"*), and the
+same Type/Price/Approval/Within-km controls the manual filter UI already has
+populate from what was understood — as editable chips you can dismiss
+before searching, never applied silently. English only; exactly four
+extractable fields, ever.
+
+Requires a local `whisper-server` (whisper.cpp) and `ffmpeg` — see
+`gateway/README.md` "Voice search" for the setup steps and the
+`WHISPER_URL`/`VOICE_ENABLED` config. If `whisper-server` isn't running, the
+endpoint fails closed with a `502` rather than falling through to an
+unfiltered search; the mic button itself hides on any origin that isn't
+HTTPS or `localhost` (`getUserMedia`'s secure-context requirement).
+
+**The self-provisioning car container bakes its own whisper-server in** —
+each car builds and runs its own copy (`~150MB` image growth, `~280MB` RAM
+while active), with no host-level dependency at all, matching the same
+"one car, one complete copy" model the rest of the container path already
+follows (`CONTAINER_PROVISIONING_ADDENDUM.md`). Verified directly: killing
+the host's whisper-server entirely and re-running a voice search against a
+running car container still worked. `scripts/run-user.sh` (local dev,
+outside Docker) still needs a whisper-server started separately on the
+host, same as Ollama — see `gateway/README.md`. Ollama itself is *not*
+baked in per car (its model is ~1.8GB and three features share it, not
+just voice) — it stays a shared host service either way.
+
+Distance ("nearby") is handled by the deterministic parser as a plain
+number, then applied through the **client-side** "within X km" filter
+above — never sent to the gateway/peer as a coordinate, consistent with the
+driver-location privacy invariant.
+
 ## Known MVP limitations (documented, not bugs)
 
 - Token balances are simple mutable counters

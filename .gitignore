@@ -2,6 +2,11 @@
 fabric-install/
 fabric-samples/
 
+# whisper.cpp checkout for the local voice-search ASR server (VOICE_INPUT_ADDENDUM.md).
+# Same pattern as fabric-samples/ above -- a large external tool checkout, not part
+# of this repo's own source. See gateway/README.md "Voice search" for setup.
+whisper.cpp/
+
 # Gateway pre-enrolled identities (MSP material)
 gateway/identities/
 
@@ -51,3 +56,5 @@ TECHNICAL_OVERVIEW.md
 CONTAINER_PROVISIONING_ADDENDUM.md
 command.md
 TRIP_PLANNER_ADDENDUM.md
+CAR_LOCATION_ADDENDUM.md
+VOICE_INPUT_ADDENDUM.md

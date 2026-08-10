@@ -16,6 +16,17 @@
 # CONTAINER_PROVISIONING_ADDENDUM.md. There's no "localhost" trick to
 # replicate there; a real network's cert is issued for its real hostname.
 #
+# Voice search (VOICE_INPUT_ADDENDUM.md) does NOT need `extra_hosts` or any
+# entry below: whisper-server is baked into the image itself and started as
+# a sibling process inside each car's own container (see entrypoint.sh and
+# the whisper-build stage in the root Dockerfile), bound to that container's
+# own 127.0.0.1. WHISPER_URL's code default (http://localhost:8080) is
+# already correct for this with zero config -- each car really does carry
+# its own copy of the ASR model, not a shared host process. Only override
+# WHISPER_URL here if you deliberately want a car to use a whisper-server
+# running somewhere else instead of its own baked-in one. VOICE_ENABLED:
+# "false" skips starting it altogether. See gateway/README.md "Voice search".
+#
 # Before first boot, seed EACH car's named volume with its OWN copy of the
 # one-time carregistrar credential (never baked into the image -- see "The
 # identity split" in the addendum). The source under gateway/identities/
