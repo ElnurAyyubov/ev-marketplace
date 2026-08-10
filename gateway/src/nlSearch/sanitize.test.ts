@@ -72,6 +72,29 @@ describe('sanitizeSelector', () => {
     expect(out.approvalRequired).toBeUndefined();
   });
 
+  it('"within 10 km" maps radiusKm through, clamped to the whitelist', () => {
+    const out = sanitizeSelector({ radiusKm: 10 });
+    expect(out.radiusKm).toBe(10);
+  });
+
+  it('clamps an out-of-range radius to 200 instead of rejecting the whole selector', () => {
+    expect(sanitizeSelector({ radiusKm: 999_999 }).radiusKm).toBe(200);
+  });
+
+  it('drops a negative or zero radius as "no constraint" (VOICE_INPUT_ADDENDUM.md section 3 clamps)', () => {
+    expect(sanitizeSelector({ radiusKm: -5 })).not.toHaveProperty('radiusKm');
+    expect(sanitizeSelector({ radiusKm: 0 })).not.toHaveProperty('radiusKm');
+  });
+
+  it('drops a non-integer or string radius rather than coercing it', () => {
+    expect(sanitizeSelector({ radiusKm: 12.5 })).not.toHaveProperty('radiusKm');
+    expect(sanitizeSelector({ radiusKm: '10' })).not.toHaveProperty('radiusKm');
+  });
+
+  it('missing radius produces NO radiusKm key', () => {
+    expect(sanitizeSelector({ providerType: 'Commercial' })).not.toHaveProperty('radiusKm');
+  });
+
   it('rejects arrays and primitives as the top-level input', () => {
     expect(sanitizeSelector(['$where', 'x'])).toEqual({ docType: 'provider', status: 'Active' });
     expect(sanitizeSelector('drop everything')).toEqual({ docType: 'provider', status: 'Active' });

@@ -281,6 +281,40 @@ build via `run-user.sh` extra args, exactly parallel to `VITE_USER_ID`. The
 gateway would never see the coordinate at all, at the cost of needing a
 rebuild to relocate and no support for the self-provisioning container path.
 
+## Voice search
+
+`VOICE_INPUT_ADDENDUM.md` adds a push-to-talk mic button next to the NL
+search box on `MarketplacePage`. Tap, speak one short utterance (e.g.
+*"residential chargers under thirty within ten km, no approval"*), and the
+same Type/Price/Approval/Within-km controls the manual filter UI already has
+populate from what was understood — as editable chips you can dismiss
+before searching, never applied silently. English only; exactly four
+extractable fields, ever.
+
+Requires a local `whisper-server` (whisper.cpp) and `ffmpeg` — see
+`gateway/README.md` "Voice search" for the setup steps and the
+`WHISPER_URL`/`VOICE_ENABLED` config. If `whisper-server` isn't running, the
+endpoint fails closed with a `502` rather than falling through to an
+unfiltered search; the mic button itself hides on any origin that isn't
+HTTPS or `localhost` (`getUserMedia`'s secure-context requirement).
+
+**The self-provisioning car container bakes its own whisper-server in** —
+each car builds and runs its own copy (`~150MB` image growth, `~280MB` RAM
+while active), with no host-level dependency at all, matching the same
+"one car, one complete copy" model the rest of the container path already
+follows (`CONTAINER_PROVISIONING_ADDENDUM.md`). Verified directly: killing
+the host's whisper-server entirely and re-running a voice search against a
+running car container still worked. `scripts/run-user.sh` (local dev,
+outside Docker) still needs a whisper-server started separately on the
+host, same as Ollama — see `gateway/README.md`. Ollama itself is *not*
+baked in per car (its model is ~1.8GB and three features share it, not
+just voice) — it stays a shared host service either way.
+
+Distance ("nearby") is handled by the deterministic parser as a plain
+number, then applied through the **client-side** "within X km" filter
+above — never sent to the gateway/peer as a coordinate, consistent with the
+driver-location privacy invariant.
+
 ## Known MVP limitations (documented, not bugs)
 
 - Token balances are simple mutable counters

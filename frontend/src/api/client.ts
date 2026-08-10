@@ -10,6 +10,7 @@ import {
   Slot,
   TripPlan,
   User,
+  VoiceSearchResult,
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_GATEWAY_URL || '';
@@ -109,6 +110,26 @@ export const api = {
         approvalRequired?: boolean;
       };
     }>(identity, 'POST', '/search/nl', { query }),
+
+  // Voice search (VOICE_INPUT_ADDENDUM.md). Returns filters, never results
+  // -- same contract as parseNlFilters, just fed by a recorded clip instead
+  // of typed text. radiusKm is a scalar; per CAR_LOCATION_ADDENDUM.md
+  // section 2.1 the caller must apply it to the marketplace's existing
+  // client-side "within X km" filter, never send it on to queryProviders.
+  parseVoiceFilters: async (identity: Identity, audio: Blob): Promise<VoiceSearchResult> => {
+    const form = new FormData();
+    form.append('audio', audio, 'clip.webm');
+    const res = await fetch(`${BASE_URL}/search/voice`, {
+      method: 'POST',
+      headers: { 'X-Identity': identity },
+      body: form,
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(payload.error || `request failed with status ${res.status}`);
+    }
+    return res.json();
+  },
 
   // Driver's own off-ledger location (CAR_LOCATION_ADDENDUM.md). Never
   // touches the chaincode/peer -- the gateway just reads/writes a file on

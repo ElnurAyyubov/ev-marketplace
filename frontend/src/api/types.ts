@@ -108,6 +108,24 @@ export interface MyLocation extends LatLng {
   source: 'file' | 'env' | 'default';
 }
 
+// VOICE_INPUT_ADDENDUM.md -- POST /search/voice response. radiusKm is a
+// scalar only; per CAR_LOCATION_ADDENDUM.md section 2.1 the caller applies
+// it to the marketplace's client-side "within X km" filter, never sends it
+// on to queryProviders.
+export interface VoiceFilters {
+  providerType?: ProviderType;
+  approvalRequired?: boolean;
+  maxPricePerkWh?: number;
+  radiusKm?: number;
+}
+
+export interface VoiceSearchResult {
+  transcript: string;
+  filters: VoiceFilters;
+  source: 'rules' | 'llm';
+  nearbyApplied: boolean;
+}
+
 export interface Waypoint extends LatLng {
   label?: string;
 }

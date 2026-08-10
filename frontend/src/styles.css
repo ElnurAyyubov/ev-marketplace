@@ -255,3 +255,60 @@ button:disabled {
   background: #1a2b3c;
   color: white;
 }
+
+.voice-btn {
+  white-space: nowrap;
+}
+
+.voice-btn-recording {
+  background: #b00020;
+  border-color: #b00020;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.voice-result {
+  margin-top: 8px;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 14px;
+  background: #e6ecf5;
+  color: #1a2b3c;
+  font-size: 13px;
+}
+
+.chip-dismiss {
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #1a2b3c;
+  font-size: 14px;
+}
+
+.chip-dismiss:hover {
+  background: rgba(26, 43, 60, 0.15);
+}
