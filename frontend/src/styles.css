@@ -2,7 +2,8 @@
   box-sizing: border-box;
 }
 
-.location-pin-icon {
+.location-pin-icon,
+.car-marker-icon {
   background: transparent;
   border: none;
 }

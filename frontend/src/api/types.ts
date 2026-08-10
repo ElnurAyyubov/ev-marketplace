@@ -101,6 +101,13 @@ export interface LatLng {
   lng: number;
 }
 
+// CAR_LOCATION_ADDENDUM.md -- the driver's own location. Off-ledger only:
+// this comes from GET /me/location (file/env/default), never from a query
+// against the ledger.
+export interface MyLocation extends LatLng {
+  source: 'file' | 'env' | 'default';
+}
+
 export interface Waypoint extends LatLng {
   label?: string;
 }

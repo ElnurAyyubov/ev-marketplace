@@ -2,6 +2,7 @@ import {
   Charger,
   ChargingProvider,
   Identity,
+  MyLocation,
   PlanConstraints,
   Reading,
   Reservation,
@@ -65,6 +66,11 @@ export const api = {
     }
   ) => request<{ providerId: string }>(identity, 'POST', '/providers', payload),
 
+  // CAR_LOCATION_ADDENDUM.md section 2.1: callers on the car-location path
+  // (MarketplacePage's client-side distance filter) must never populate
+  // lat/lng/radiusKm here -- those exist only for the pre-existing
+  // server-side proximity path. Passing them would send the driver's
+  // coordinates to the peer as a query parameter, defeating the invariant.
   queryProviders: (
     identity: Identity,
     filters: {
@@ -103,6 +109,14 @@ export const api = {
         approvalRequired?: boolean;
       };
     }>(identity, 'POST', '/search/nl', { query }),
+
+  // Driver's own off-ledger location (CAR_LOCATION_ADDENDUM.md). Never
+  // touches the chaincode/peer -- the gateway just reads/writes a file on
+  // this identity's own volume.
+  getMyLocation: (identity: Identity) => request<MyLocation>(identity, 'GET', '/me/location'),
+
+  setMyLocation: (identity: Identity, lat: number, lng: number) =>
+    request<{ lat: number; lng: number }>(identity, 'POST', '/me/location', { lat, lng }),
 
   getProvider: (identity: Identity, providerId: string) =>
     request<ChargingProvider>(identity, 'GET', `/providers/${providerId}`),

@@ -247,6 +247,40 @@ terminal/browser tab:
    reading, paying the provider and refunding the driver the remainder.
    No party ever types in a delivered-energy number.
 
+## Driver (car) location
+
+`CAR_LOCATION_ADDENDUM.md` adds a driver/car location, shown as a distinct
+marker on the marketplace map and used for a client-side "within X km"
+distance filter and per-result "N.N km away" labels.
+
+> **Privacy invariant:** the car's location is (1) never written to the
+> ledger, and (2) never sent to a Fabric peer as a query parameter. Distance
+> filtering is computed in the browser, against a providers list fetched
+> using only non-location (type/price) criteria.
+
+**Chosen (runtime) variant:** each single-tenant gateway serves its own
+identity's location from `GET /me/location`, resolved in priority order:
+`gateway/identities/<user>/location.json` (if present) → `USER_LAT`/`USER_LNG`
+env vars → a default city center (Istanbul, `41.0082, 28.9784`). The
+marketplace page reads this at load and lets you move the car (map-click,
+lat/lng inputs, or the browser's Geolocation API); moves persist via
+dev-guarded `POST /me/location`, which — like the faucet — only writes to
+this gateway's own identity volume and never touches the chaincode.
+
+Set a user's location from the terminal (no rebuild needed — reload that
+user's frontend to see it move):
+```bash
+./scripts/set-location.sh alice 41.0082 28.9784
+# or, from a terminal that already has GATEWAY_USER exported for alice's gateway:
+GATEWAY_USER=alice ./scripts/set-location.sh 41.0082 28.9784
+```
+
+**Build-time alternative (max-purity, dev-only, not implemented as the
+primary path):** bake `VITE_USER_LAT`/`VITE_USER_LNG` into the frontend
+build via `run-user.sh` extra args, exactly parallel to `VITE_USER_ID`. The
+gateway would never see the coordinate at all, at the cost of needing a
+rebuild to relocate and no support for the self-provisioning container path.
+
 ## Known MVP limitations (documented, not bugs)
 
 - Token balances are simple mutable counters

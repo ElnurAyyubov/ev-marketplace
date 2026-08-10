@@ -87,6 +87,11 @@ providersRouter.get(
       selector.pricePerkWh = priceRange;
     }
 
+    // lat/lng/radiusKm remain supported here for backward compatibility, but
+    // per CAR_LOCATION_ADDENDUM.md section 2.1 the marketplace's car-location
+    // filter path must never populate them -- distance filtering for the
+    // driver's own location happens client-side instead. Do not wire a car
+    // coordinate into this query.
     let center: { lat: number; lng: number; radiusKm: number } | undefined;
     if (lat !== undefined && lng !== undefined && radiusKm !== undefined) {
       center = { lat: Number(lat), lng: Number(lng), radiusKm: Number(radiusKm) };
