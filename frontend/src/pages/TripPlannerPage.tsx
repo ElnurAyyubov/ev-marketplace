@@ -4,6 +4,13 @@ import { PlanConstraints, TripLegFailure, TripPlan, TripReserveResult } from '..
 import { LocationPickerMap } from '../components/LocationPickerMap';
 import { TripPlanMap } from '../components/TripPlanMap';
 import { useIdentity } from '../context/IdentityContext';
+import { DemoTripSection } from '../demo/DemoTripSection';
+
+// DEMO_RUNNER_ADDENDUM.md section 2.3: gated at module scope so Vite/Rollup
+// can fold this to `false` at build time and drop the whole demo/ import
+// chain (DemoTripSection -> useDemoRunner/DemoControlBar/CarMarker) from
+// the production bundle when unset.
+const DEMO_ENABLED = import.meta.env.VITE_ENABLE_DEV_DEMO === 'true'; // DEMO-HOOK
 
 interface Props {
   onSelectProvider: (providerId: string) => void;
@@ -350,7 +357,7 @@ export function TripPlannerPage({ onSelectProvider }: Props) {
             <p style={{ fontStyle: 'italic', background: '#f5f6f8', padding: 10, borderRadius: 6 }}>{narration}</p>
           )}
 
-          <TripPlanMap plan={plan} />
+          {DEMO_ENABLED ? <DemoTripSection plan={plan} /> : <TripPlanMap plan={plan} />}
 
           {plan.stops.map((s, i) => (
             <div key={s.providerId} className="provider-list-item" onClick={() => onSelectProvider(s.providerId)}>
