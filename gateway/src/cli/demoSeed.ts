@@ -13,8 +13,24 @@
 // section 4.2) -- scripts/demo-seed.sh reads these to enroll charger
 // identities, launch charger-sim processes, and write the chargerId ->
 // ADMIN_PORT manifest devDemo.ts reads. No jq dependency needed.
+import { GatewayError } from '@hyperledger/fabric-gateway';
 import { LAT_LNG_SCALE } from '../geo';
 import { withContract } from '../fabric';
+import { unwrapChaincodeMessage } from '../routes/util';
+
+/**
+ * A bare GatewayError's .message is just the generic gRPC status ("10
+ * ABORTED: failed to endorse transaction..."); the actual chaincode
+ * rejection reason is per-peer in .details. Mirrors
+ * gateway/src/routes/util.ts's errorMiddleware and charger-sim/src/util.ts's
+ * describeError so this CLI surfaces the real cause too.
+ */
+function describeError(err: unknown): string {
+  if (err instanceof GatewayError && err.details.length > 0) {
+    return err.details.map((detail) => unwrapChaincodeMessage(detail.message)).join('; ');
+  }
+  return err instanceof Error ? err.message : String(err);
+}
 
 const ADMIN_IDENTITY = 'minteradmin'; // Constants.ADMIN_IDENTITY -- ResetMarketplaceData/Mint are gated to this identity.
 const OWNER_IDENTITY = 'admin'; // RegisterProvider/RegisterCharger accept any caller; reuse the identity every dev setup already enrolls.
@@ -98,6 +114,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
+  console.error(describeError(err));
   process.exit(1);
 });
