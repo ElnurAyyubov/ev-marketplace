@@ -35,7 +35,11 @@ export const setupApi = {
     }),
 };
 
-async function request<T>(
+// Exported (not just used internally) so frontend/src/demo/api.ts -- kept
+// out of this shared file entirely, see that file's header -- can build
+// dev-only demo requests through the same request/error-handling path
+// without duplicating it.
+export async function request<T>(
   identity: Identity,
   method: string,
   path: string,
@@ -213,17 +217,4 @@ export const api = {
 
   cancelTrip: (identity: Identity, reservationIds: string[]) =>
     request<{ refunded: number }>(identity, 'POST', '/trip/plan/cancel', { reservationIds }),
-
-  // Demo runner (DEMO_RUNNER_ADDENDUM.md) -- dev-only, 404s unless the
-  // gateway has ENABLE_DEV_DEMO set.
-  demoEnabled: (identity: Identity) => request<{ enabled: boolean }>(identity, 'GET', '/dev/demo/enabled'),
-
-  demoPlugin: (identity: Identity, payload: { chargerId: string; reservationId: string }) =>
-    request<void>(identity, 'POST', '/dev/demo/plugin', payload),
-
-  demoUnplug: (identity: Identity, payload: { chargerId: string }) =>
-    request<void>(identity, 'POST', '/dev/demo/unplug', payload),
-
-  demoConflict: (identity: Identity, payload: { providerId: string; slotIndex: number; windowStart: number }) =>
-    request<void>(identity, 'POST', '/dev/demo/conflict', payload),
 };

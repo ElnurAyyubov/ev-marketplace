@@ -27,6 +27,7 @@ import { useCallback, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { Identity, LatLng, TripPlan } from '../api/types';
 import { useIdentity } from '../context/IdentityContext';
+import { demoApi } from './api';
 import { DemoEvent, DemoLatLng, DemoPhase, DemoRunConfig } from './types';
 
 const EARTH_RADIUS_KM = 6371;
@@ -177,7 +178,7 @@ export function useDemoRunner(plan: TripPlan | null): UseDemoRunnerResult {
     if (activeChargerIdRef.current) {
       // Best-effort cleanup so a manual stop mid-charge doesn't leave a
       // charger-sim actively ticking against an abandoned run.
-      void api.demoUnplug(identity, { chargerId: activeChargerIdRef.current }).catch(() => {});
+      void demoApi.unplug(identity, { chargerId: activeChargerIdRef.current }).catch(() => {});
       activeChargerIdRef.current = null;
     }
     reservedLegsRef.current = null;
@@ -299,7 +300,7 @@ export function useDemoRunner(plan: TripPlan | null): UseDemoRunnerResult {
       for (;;) {
         if (generationRef.current !== myGeneration) return false;
         try {
-          await api.demoPlugin(id, { chargerId, reservationId });
+          await demoApi.plugin(id, { chargerId, reservationId });
           pushEvent('sim', `Plugging in at ${chargerId}`);
           return true;
         } catch (err) {
@@ -549,7 +550,7 @@ export function useDemoRunner(plan: TripPlan | null): UseDemoRunnerResult {
         }
 
         try {
-          await api.demoConflict(identity, { providerId, slotIndex, windowStart });
+          await demoApi.conflict(identity, { providerId, slotIndex, windowStart });
           pushEvent('sim', `Conflict injected at stop ${stopIndex + 1} (as demo-driver-2) -- claims the same booking bucket`);
         } catch (err) {
           pushEvent(
