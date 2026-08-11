@@ -159,3 +159,23 @@ providersRouter.get(
     res.json(JSON.parse(Buffer.from(result).toString('utf8')));
   })
 );
+
+// TRIP_RESERVATION_ADDENDUM.md section 4: occupied booking-bucket starts for
+// one slot in [from, to), used for availability display and (from R2 on)
+// trip-leg slot selection.
+providersRouter.get(
+  '/providers/:id/availability',
+  asyncHandler(async (req, res) => {
+    const identity = requireIdentity(req);
+    const { slotIndex, from, to } = req.query as Record<string, string | undefined>;
+    if (slotIndex === undefined || from === undefined || to === undefined) {
+      throw new HttpError(400, 'slotIndex, from, and to query parameters are required');
+    }
+
+    const result = await withContract(identity, (contract) =>
+      contract.evaluateTransaction('GetSlotAvailability', req.params.id, slotIndex, from, to)
+    );
+    const occupiedBuckets = JSON.parse(Buffer.from(result).toString('utf8'));
+    res.json({ occupiedBuckets });
+  })
+);

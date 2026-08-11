@@ -66,4 +66,10 @@ public final class Constants {
 
     // Faucet/mint authority identity (MVP simplification, see SmartContract).
     public static final String ADMIN_IDENTITY = "minteradmin";
+
+    // Trip reservation booking buckets (TRIP_RESERVATION_ADDENDUM.md section
+    // 3): a slot's availability is tracked per fixed-width time bucket
+    // rather than by a single occupied flag, so a booking for later doesn't
+    // block a walk-up reservation today.
+    public static final long BOOKING_BUCKET_SECONDS = 1800; // 30 min
 }

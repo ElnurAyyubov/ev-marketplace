@@ -172,16 +172,59 @@ public final class SmartContract implements ContractInterface {
         ChaincodeUtil.putJSON(ctx, key, provider);
     }
 
-    /** Returns all slots for a provider. */
+    /**
+     * Returns all slots for a provider. `occupied` is a derived display flag
+     * (TRIP_RESERVATION_ADDENDUM.md section 3.2): it reflects whether a
+     * booking key exists for the bucket containing `now`, not whether any
+     * reservation exists for the slot, so a future booking doesn't show a
+     * slot as occupied today.
+     */
     @Transaction(intent = Transaction.TYPE.EVALUATE)
     public String GetSlots(final Context ctx, final String providerId) {
+        long bucketStart = ChaincodeUtil.floorToBucket(ChaincodeUtil.txNow(ctx));
         List<Slot> slots = new ArrayList<>();
         try (QueryResultsIterator<KeyValue> results = ctx.getStub().getStateByPartialCompositeKey("slot", providerId)) {
             for (KeyValue result : results) {
-                slots.add(ChaincodeUtil.fromJSON(result.getStringValue(), Slot.class));
+                Slot slot = ChaincodeUtil.fromJSON(result.getStringValue(), Slot.class);
+                slot.setOccupied(isBucketClaimed(ctx, providerId, slot.getSlotId(), bucketStart));
+                slots.add(slot);
             }
         }
         return ChaincodeUtil.toJSON(slots);
+    }
+
+    /**
+     * Read-only. Returns the occupied booking-bucket starts for
+     * (providerId, slotIndex) in [fromTs, toTs) (TRIP_RESERVATION_ADDENDUM.md
+     * section 4). GetStateByRange is phantom-read safe in Fabric, unlike a
+     * rich-query selector over the same data would be (section 3.1).
+     */
+    @Transaction(intent = Transaction.TYPE.EVALUATE)
+    public String GetSlotAvailability(final Context ctx, final String providerId, final String slotIndex, final String fromTs, final String toTs) {
+        getSlotOrThrow(ctx, providerId, slotIndex);
+        long from;
+        long to;
+        try {
+            from = Long.parseLong(fromTs);
+            to = Long.parseLong(toTs);
+        } catch (NumberFormatException e) {
+            throw new ChaincodeException("fromTs and toTs must be integer unix-second timestamps");
+        }
+        if (to <= from) {
+            throw new ChaincodeException("toTs must be greater than fromTs");
+        }
+
+        String startKey = ChaincodeUtil.bookingKey(ctx, providerId, slotIndex, ChaincodeUtil.floorToBucket(from));
+        String endKey = ChaincodeUtil.bookingKey(ctx, providerId, slotIndex, ChaincodeUtil.floorToBucket(to));
+
+        List<Long> occupiedBuckets = new ArrayList<>();
+        try (QueryResultsIterator<KeyValue> results = ctx.getStub().getStateByRange(startKey, endKey)) {
+            for (KeyValue result : results) {
+                List<String> parts = ctx.getStub().splitCompositeKey(result.getKey()).getAttributes();
+                occupiedBuckets.add(Long.parseLong(parts.get(2)));
+            }
+        }
+        return ChaincodeUtil.toJSON(occupiedBuckets);
     }
 
     /**
@@ -346,13 +389,39 @@ public final class SmartContract implements ContractInterface {
     }
 
     /**
+     * True if a booking key is present for the given (providerId, slotId,
+     * bucketStart) triple (TRIP_RESERVATION_ADDENDUM.md section 3.1). This
+     * read participates in the transaction's read set, so a concurrent
+     * transaction over the same bucket is caught by Fabric's MVCC at commit
+     * time exactly like the old Slot-key check.
+     */
+    private boolean isBucketClaimed(final Context ctx, final String providerId, final String slotId, final long bucketStart) {
+        String v = ctx.getStub().getStringState(ChaincodeUtil.bookingKey(ctx, providerId, slotId, bucketStart));
+        return v != null && !v.isEmpty();
+    }
+
+    /** Claims a single booking bucket, or throws if another reservation already holds it. */
+    private void claimBucket(final Context ctx, final String providerId, final String slotId, final long bucketStart) {
+        if (isBucketClaimed(ctx, providerId, slotId, bucketStart)) {
+            throw new ChaincodeException("slot " + slotId + " on provider " + providerId + " is already booked for that time");
+        }
+        ctx.getStub().putStringState(ChaincodeUtil.bookingKey(ctx, providerId, slotId, bucketStart), "1");
+    }
+
+    /** Frees a single booking bucket, e.g. on cancel, expiry, or session completion. */
+    private void freeBucket(final Context ctx, final String providerId, final String slotId, final long bucketStart) {
+        ctx.getStub().delState(ChaincodeUtil.bookingKey(ctx, providerId, slotId, bucketStart));
+    }
+
+    /**
      * Reserves a free slot for the calling driver. Escrow is locked
      * immediately if the provider does not require owner approval; otherwise
-     * the reservation waits in REQUESTED state. Either way the slot is marked
-     * occupied as part of this call, so a losing concurrent CreateReservation
-     * on the same slot fails cleanly instead of double booking (Fabric's MVCC
-     * read-set on the slot key invalidates the loser's transaction at commit
-     * time).
+     * the reservation waits in REQUESTED state. Either way this call claims
+     * the booking bucket containing `now` as part of the transaction
+     * (TRIP_RESERVATION_ADDENDUM.md section 3), so a losing concurrent
+     * CreateReservation over the same bucket fails cleanly instead of double
+     * booking (Fabric's MVCC read-set on the booking key invalidates the
+     * loser's transaction at commit time).
      */
     @Transaction(intent = Transaction.TYPE.SUBMIT)
     public String CreateReservation(final Context ctx, final String providerId, final String slotId, final int requestedEnergy) {
@@ -367,16 +436,14 @@ public final class SmartContract implements ContractInterface {
         }
 
         Slot slot = getSlotOrThrow(ctx, providerId, slotId);
-        if (slot.isOccupied()) {
-            throw new ChaincodeException("slot " + slotId + " on provider " + providerId + " is already occupied");
-        }
+        long now = ChaincodeUtil.txNow(ctx);
+        claimBucket(ctx, providerId, slotId, ChaincodeUtil.floorToBucket(now));
 
         long escrowAmount = (long) requestedEnergy * provider.getPricePerkWh();
         // check whether the buyer has enough money to set to escrow
         if (TokenLedger.getBalance(ctx, driverId) < escrowAmount) {
             throw new  ChaincodeException("You have insufficient balance to make a reservation");
         }
-        long now = ChaincodeUtil.txNow(ctx);
         String reservationId = "res-" + ctx.getStub().getTxId();
 
         String state = Constants.RESERVATION_STATE_CONFIRMED;
@@ -406,9 +473,8 @@ public final class SmartContract implements ContractInterface {
         reservation.setExpiresAt(now + timeoutSeconds);
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservationId), reservation);
 
-        // Mark the slot occupied regardless of approval state, to prevent
-        // double-booking while a REQUESTED reservation awaits approval.
-        slot.setOccupied(true);
+        // occupied is now a derived display flag (GetSlots); exclusivity for
+        // this bucket was already established above by claimBucket.
         slot.setCurrentReservationId(reservationId);
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.slotKey(ctx, providerId, slotId), slot);
 
@@ -473,7 +539,7 @@ public final class SmartContract implements ContractInterface {
 
         reservation.setState(Constants.RESERVATION_STATE_CANCELLED);
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservationId), reservation);
-        freeSlot(ctx, reservation.getProviderId(), reservation.getSlotId());
+        freeSlot(ctx, reservation);
     }
 
     /**
@@ -505,7 +571,7 @@ public final class SmartContract implements ContractInterface {
         }
         reservation.setState(Constants.RESERVATION_STATE_EXPIRED);
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservation.getReservationId()), reservation);
-        freeSlot(ctx, reservation.getProviderId(), reservation.getSlotId());
+        freeSlot(ctx, reservation);
     }
 
     /** Returns a reservation's record. */
@@ -575,16 +641,26 @@ public final class SmartContract implements ContractInterface {
         }
     }
 
-    /** Marks a slot unoccupied and bumps the provider's available-slot counter back up. */
-    private void freeSlot(final Context ctx, final String providerId, final String slotId) {
+    /**
+     * Clears a slot's current-reservation pointer, bumps the provider's
+     * available-slot counter back up, and frees the booking bucket the given
+     * reservation claimed (derived from its createdAt, since walk-up
+     * reservations always book the bucket containing `now` at creation --
+     * TRIP_RESERVATION_ADDENDUM.md section 3.3).
+     */
+    private void freeSlot(final Context ctx, final Reservation reservation) {
+        String providerId = reservation.getProviderId();
+        String slotId = reservation.getSlotId();
+
         Slot slot = getSlotOrThrow(ctx, providerId, slotId);
-        slot.setOccupied(false);
         slot.setCurrentReservationId("");
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.slotKey(ctx, providerId, slotId), slot);
 
         ChargingProvider provider = GetProvider(ctx, providerId);
         provider.setCurrentAvailableSlots(provider.getCurrentAvailableSlots() + 1);
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.providerKey(ctx, providerId), provider);
+
+        freeBucket(ctx, providerId, slotId, ChaincodeUtil.floorToBucket(reservation.getCreatedAt()));
     }
 
     // ==================== Sessions ====================
@@ -775,7 +851,7 @@ public final class SmartContract implements ContractInterface {
         provider.setAvailableEnergy(provider.getAvailableEnergy() + reservation.getRequestedEnergy() - actualKwhDelivered);
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.providerKey(ctx, provider.getProviderId()), provider);
 
-        freeSlot(ctx, reservation.getProviderId(), reservation.getSlotId());
+        freeSlot(ctx, reservation);
     }
 
     /** Returns a session's record. */

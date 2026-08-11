@@ -82,6 +82,16 @@ public final class ChaincodeUtil {
         return ctx.getStub().createCompositeKey("malfunction", sessionId).toString();
     }
 
+    /** Floors a unix-seconds timestamp to the containing booking bucket's start. */
+    public static long floorToBucket(final long unixSeconds) {
+        return (unixSeconds / Constants.BOOKING_BUCKET_SECONDS) * Constants.BOOKING_BUCKET_SECONDS;
+    }
+
+    /** bucketStart is zero-padded to 12 digits so GetStateByRange orders buckets lexicographically = numerically. */
+    public static String bookingKey(final Context ctx, final String providerId, final String slotId, final long bucketStart) {
+        return ctx.getStub().createCompositeKey("booking", providerId, slotId, String.format("%012d", bucketStart)).toString();
+    }
+
     /** Marshals v and writes it to the given key. */
     public static void putJSON(final Context ctx, final String key, final Object v) {
         ctx.getStub().putStringState(key, GENSON.serialize(v));
