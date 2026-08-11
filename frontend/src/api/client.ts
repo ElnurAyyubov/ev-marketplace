@@ -213,4 +213,17 @@ export const api = {
 
   cancelTrip: (identity: Identity, reservationIds: string[]) =>
     request<{ refunded: number }>(identity, 'POST', '/trip/plan/cancel', { reservationIds }),
+
+  // Demo runner (DEMO_RUNNER_ADDENDUM.md) -- dev-only, 404s unless the
+  // gateway has ENABLE_DEV_DEMO set.
+  demoEnabled: (identity: Identity) => request<{ enabled: boolean }>(identity, 'GET', '/dev/demo/enabled'),
+
+  demoPlugin: (identity: Identity, payload: { chargerId: string; reservationId: string }) =>
+    request<void>(identity, 'POST', '/dev/demo/plugin', payload),
+
+  demoUnplug: (identity: Identity, payload: { chargerId: string }) =>
+    request<void>(identity, 'POST', '/dev/demo/unplug', payload),
+
+  demoConflict: (identity: Identity, payload: { providerId: string; slotIndex: number; windowStart: number }) =>
+    request<void>(identity, 'POST', '/dev/demo/conflict', payload),
 };
