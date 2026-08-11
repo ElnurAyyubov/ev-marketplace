@@ -28,11 +28,15 @@ export function unwrapChaincodeMessage(message: string): string {
 
 export function errorMiddleware(
   err: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _next: NextFunction
 ): void {
+  // Previously silent -- this middleware only ever sent the client a
+  // response, so diagnosing a failure meant reproducing it with extra
+  // instrumentation instead of just reading the gateway's own log.
+  console.error(`[${req.method} ${req.path}]`, err);
   if (err instanceof HttpError) {
     res.status(err.status).json({ error: err.message });
     return;
