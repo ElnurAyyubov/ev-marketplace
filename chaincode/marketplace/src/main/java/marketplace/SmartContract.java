@@ -214,14 +214,24 @@ public final class SmartContract implements ContractInterface {
             throw new ChaincodeException("toTs must be greater than fromTs");
         }
 
-        String startKey = ChaincodeUtil.bookingKey(ctx, providerId, slotIndex, ChaincodeUtil.floorToBucket(from));
-        String endKey = ChaincodeUtil.bookingKey(ctx, providerId, slotIndex, ChaincodeUtil.floorToBucket(to));
+        // Inclusive of the bucket containing (to - 1), matching bucketsInWindow's
+        // own [floorToBucket(windowStart), floorToBucket(windowEnd - 1)] rule --
+        // a raw getStateByRange with an exclusive end key at floorToBucket(to)
+        // returns nothing whenever the whole window fits inside one bucket
+        // (a false negative for a bucket that IS booked), and scanning via
+        // getStateByPartialCompositeKey avoids driving a raw composite-key
+        // range into the peer at all, like GetSlots already does above.
+        long fromBucket = ChaincodeUtil.floorToBucket(from);
+        long toBucket = ChaincodeUtil.floorToBucket(to - 1);
 
         List<Long> occupiedBuckets = new ArrayList<>();
-        try (QueryResultsIterator<KeyValue> results = ctx.getStub().getStateByRange(startKey, endKey)) {
+        try (QueryResultsIterator<KeyValue> results = ctx.getStub().getStateByPartialCompositeKey("booking", providerId, slotIndex)) {
             for (KeyValue result : results) {
                 List<String> parts = ctx.getStub().splitCompositeKey(result.getKey()).getAttributes();
-                occupiedBuckets.add(Long.parseLong(parts.get(2)));
+                long bucketStart = Long.parseLong(parts.get(2));
+                if (bucketStart >= fromBucket && bucketStart <= toBucket) {
+                    occupiedBuckets.add(bucketStart);
+                }
             }
         }
         return ChaincodeUtil.toJSON(occupiedBuckets);
