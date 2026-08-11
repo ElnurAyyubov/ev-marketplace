@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { withContract } from '../fabric';
+import { withContract, withTransientContract } from '../fabric';
 import { asyncHandler, HttpError, requireIdentity } from './util';
 
 export const reservationsRouter = Router();
@@ -17,13 +17,14 @@ reservationsRouter.post(
       throw new HttpError(400, 'providerId, slotId, and requestedEnergy are required');
     }
 
-    const result = await withContract(identity, (contract) =>
-      contract.submitTransaction(
-        'CreateReservation',
-        providerId,
-        String(slotId),
-        String(requestedEnergy)
-      )
+    // providerId/slotId identify where the driver will be, so they travel as
+    // transient data, never as a regular argument (TRIP_RESERVATION_ADDENDUM.md
+    // section 7.3) -- a regular argument lands in the block in cleartext.
+    const result = await withTransientContract(identity, (contract) =>
+      contract.submit('CreateReservation', {
+        arguments: [String(requestedEnergy)],
+        transientData: { leg: JSON.stringify({ providerId, slotId: String(slotId) }) },
+      })
     );
     res.status(201).json({ reservationId: Buffer.from(result).toString('utf8') });
   })

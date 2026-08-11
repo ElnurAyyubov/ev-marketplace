@@ -22,7 +22,7 @@ export function asyncHandler(
 }
 
 /** Strips Fabric's "chaincode response <code>, " wrapper, leaving just the ChaincodeException message. */
-function unwrapChaincodeMessage(message: string): string {
+export function unwrapChaincodeMessage(message: string): string {
   return message.replace(/^chaincode response \d+,\s*/, '');
 }
 

@@ -65,7 +65,9 @@ export interface Reservation {
   escrowAmount: number; // pre-authorization hold, not a disputed-settlement escrow (Addendum A section 4)
   state: ReservationState;
   createdAt: number;
-  expiresAt: number; // also functions as the charger-start "startDeadline" while CONFIRMED
+  expiresAt: number; // charge-window-anchored start deadline (TRIP_RESERVATION_ADDENDUM.md section 9)
+  windowStart: number;
+  windowEnd: number;
 }
 
 // Addendum A section 5.2: the entire session machine is ACTIVE -> SETTLED.
@@ -110,6 +112,7 @@ export interface PlanConstraints {
   maxPricePerkWh?: number;
   approvalRequired?: boolean;
   connectorTypes?: string[];
+  excludeProviders?: string[];
 }
 
 export interface PlannedStop {
@@ -140,4 +143,32 @@ export interface TripPlan {
   roadGeometry?: LatLng[];
   roadDistanceKm?: number;
   etaMinutes?: number;
+}
+
+// Trip reservation (TRIP_RESERVATION_ADDENDUM.md) -- itinerary pre-booking
+// layered on top of the read-only trip planner above.
+export interface TripReserveLeg {
+  providerId: string;
+  location: LatLng;
+  requestedEnergyWh: number;
+}
+
+export interface TripWindow {
+  providerId: string;
+  slotIndex: number;
+  windowStart: number;
+  windowEnd: number;
+}
+
+export interface TripReserveResult {
+  reservationIds: string[];
+  totalHold: number;
+  windowSource: 'deterministic' | 'osrm';
+  windows: TripWindow[];
+}
+
+export interface TripLegFailure {
+  failedLegIndex: number;
+  providerId: string;
+  reason: string;
 }

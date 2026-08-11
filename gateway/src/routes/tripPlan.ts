@@ -1,10 +1,13 @@
 /**
- * Read-only trip-planner REST surface (TRIP_PLANNER_ADDENDUM.md §9). Never
- * writes to the ledger: QueryProviders is the only chaincode call made from
- * this file, and it is always evaluateTransaction, never submit.
+ * Trip-planner REST surface. `/trip/plan` and `/trip/plan/nl`
+ * (TRIP_PLANNER_ADDENDUM.md §9) are read-only: QueryProviders is their only
+ * chaincode call, always evaluateTransaction, never submit.
+ * `/trip/plan/reserve` and `/trip/plan/cancel`
+ * (TRIP_RESERVATION_ADDENDUM.md §6) do write, via ReserveTripLegs/CancelTripLegs.
  */
+import { GatewayError } from '@hyperledger/fabric-gateway';
 import { Router } from 'express';
-import { withContract } from '../fabric';
+import { withContract, withTransientContract } from '../fabric';
 import { boundingBoxSelector, haversineKm, LAT_LNG_SCALE } from '../geo';
 import { geocode, GeocodeError } from '../tripPlanner/geocode';
 import { narrateTripPlan } from '../tripPlanner/narrate';
@@ -12,7 +15,8 @@ import { parseTripQuery } from '../tripPlanner/nlPlan';
 import { planTrip } from '../tripPlanner/planner';
 import { getRoadOverlay } from '../tripPlanner/roadOverlay';
 import { LatLng, PlanConstraints, ProviderQueryFn, TripPlan, Waypoint } from '../tripPlanner/types';
-import { asyncHandler, HttpError, requireIdentity } from './util';
+import { computeWindows } from '../tripPlanner/windowPlan';
+import { asyncHandler, HttpError, requireIdentity, unwrapChaincodeMessage } from './util';
 
 export const tripPlanRouter = Router();
 
@@ -57,6 +61,7 @@ function makeQueryFn(identity: string): ProviderQueryFn {
           !constraints.connectorTypes?.length ||
           d.connectorTypes.some((c) => constraints.connectorTypes!.includes(c))
       )
+      .filter((d) => !constraints.excludeProviders?.includes(d.providerId))
       .map((d) => ({
         providerId: d.providerId,
         location: { lat: d.latitude / LAT_LNG_SCALE, lng: d.longitude / LAT_LNG_SCALE },
@@ -177,5 +182,277 @@ tripPlanRouter.post(
     }
 
     res.json({ plan, narration });
+  })
+);
+
+// ==================== Trip reservation (TRIP_RESERVATION_ADDENDUM.md §6) ====================
+
+interface ReserveProviderDoc {
+  providerId: string;
+  status: string;
+  approvalRequired: boolean;
+  pricePerkWh: number;
+  [key: string]: unknown;
+}
+
+interface ChargerDoc {
+  chargerId: string;
+  providerId: string;
+  slotIndex: number;
+  ratedPowerKw: number;
+  status: string;
+  [key: string]: unknown;
+}
+
+interface UnresolvedLeg {
+  providerId: string;
+  location: LatLng;
+  requestedEnergyWh: number;
+}
+
+interface ResolvedLeg {
+  providerId: string;
+  slotIndex: number;
+  requestedEnergyWh: number;
+  windowStart: number;
+  windowEnd: number;
+}
+
+interface TripLegFailure {
+  failedLegIndex: number;
+  providerId: string;
+  reason: string;
+}
+
+function isLatLng(v: unknown): v is LatLng {
+  if (typeof v !== 'object' || v === null) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.lat === 'number' && typeof o.lng === 'number';
+}
+
+async function fetchProvider(identity: string, providerId: string): Promise<ReserveProviderDoc> {
+  const result = await withContract(identity, (contract) => contract.evaluateTransaction('GetProvider', providerId));
+  return JSON.parse(Buffer.from(result).toString('utf8')) as ReserveProviderDoc;
+}
+
+async function fetchActiveChargers(identity: string, providerId: string): Promise<ChargerDoc[]> {
+  const result = await withContract(identity, (contract) =>
+    contract.evaluateTransaction('QueryChargersByProvider', providerId)
+  );
+  const chargers = JSON.parse(Buffer.from(result).toString('utf8')) as ChargerDoc[];
+  return chargers.filter((c) => c.status === 'Active').sort((a, b) => a.slotIndex - b.slotIndex);
+}
+
+async function fetchOccupiedBuckets(
+  identity: string,
+  providerId: string,
+  slotIndex: number,
+  fromTs: number,
+  toTs: number
+): Promise<number[]> {
+  const result = await withContract(identity, (contract) =>
+    contract.evaluateTransaction('GetSlotAvailability', providerId, String(slotIndex), String(fromTs), String(toTs))
+  );
+  return JSON.parse(Buffer.from(result).toString('utf8')) as number[];
+}
+
+/**
+ * Sequentially resolves each leg's slot and window (TRIP_RESERVATION_ADDENDUM.md
+ * §6.5): for the lowest-indexed Active charger with a fully free window, in
+ * slotIndex order. The window for a candidate charger is computed with
+ * computeWindows so this never drifts from the pure, unit-tested formula in
+ * windowPlan.ts. A leg's outcome anchors the next leg's travel-time cursor,
+ * so slot choices and windows are resolved together, in leg order.
+ */
+async function resolveLegs(
+  identity: string,
+  legs: UnresolvedLeg[],
+  departAt: number,
+  assumedSpeedKmh: number,
+  origin: LatLng | undefined
+): Promise<{ resolved: ResolvedLeg[]; totalHold: number } | TripLegFailure> {
+  const resolved: ResolvedLeg[] = [];
+  let previousLocation = origin;
+  let cursor = departAt;
+  let totalHold = 0;
+
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i];
+
+    let provider: ReserveProviderDoc;
+    try {
+      provider = await fetchProvider(identity, leg.providerId);
+    } catch {
+      return { failedLegIndex: i, providerId: leg.providerId, reason: 'provider not found' };
+    }
+    if (provider.status !== 'Active') {
+      return { failedLegIndex: i, providerId: leg.providerId, reason: 'provider is not active' };
+    }
+    if (provider.approvalRequired) {
+      return { failedLegIndex: i, providerId: leg.providerId, reason: 'provider requires manual approval' };
+    }
+
+    const chargers = await fetchActiveChargers(identity, leg.providerId);
+    let chosen: { slotIndex: number; windowStart: number; windowEnd: number } | undefined;
+    for (const charger of chargers) {
+      const [window] = computeWindows(
+        [{ location: leg.location, requestedEnergyWh: leg.requestedEnergyWh, ratedPowerKw: charger.ratedPowerKw }],
+        cursor,
+        assumedSpeedKmh,
+        previousLocation
+      );
+      const occupied = await fetchOccupiedBuckets(identity, leg.providerId, charger.slotIndex, window.windowStart, window.windowEnd);
+      if (occupied.length === 0) {
+        chosen = { slotIndex: charger.slotIndex, windowStart: window.windowStart, windowEnd: window.windowEnd };
+        break;
+      }
+    }
+
+    if (!chosen) {
+      return { failedLegIndex: i, providerId: leg.providerId, reason: 'no free slot with a registered charger in the required window' };
+    }
+
+    resolved.push({
+      providerId: leg.providerId,
+      slotIndex: chosen.slotIndex,
+      requestedEnergyWh: leg.requestedEnergyWh,
+      windowStart: chosen.windowStart,
+      windowEnd: chosen.windowEnd,
+    });
+    totalHold += Math.floor((leg.requestedEnergyWh * provider.pricePerkWh) / 1000);
+
+    cursor = chosen.windowEnd;
+    previousLocation = leg.location;
+  }
+
+  return { resolved, totalHold };
+}
+
+/** Parses ReserveTripLegs' pipe-delimited errors (CODE|legIndex|providerId|message, §4.2) into the 409 body. */
+function parseTripLegError(err: unknown): TripLegFailure | undefined {
+  if (!(err instanceof GatewayError) || err.details.length === 0) return undefined;
+  const message = unwrapChaincodeMessage(err.details[0].message);
+  const parts = message.split('|');
+  if (parts.length !== 4) return undefined;
+  const [, legIndexStr, providerId, reason] = parts;
+  const failedLegIndex = Number(legIndexStr);
+  if (Number.isNaN(failedLegIndex)) return undefined;
+  return { failedLegIndex, providerId, reason };
+}
+
+const MIN_SPEED = 20;
+const MAX_SPEED = process.env.ENABLE_DEV_DEMO ? 10_000 : 150; // DEMO-HOOK
+const DEFAULT_ASSUMED_SPEED_KMH = 80;
+
+tripPlanRouter.post(
+  '/trip/plan/reserve',
+  asyncHandler(async (req, res) => {
+    const identity = requireIdentity(req);
+    const body = req.body as {
+      legs?: { providerId?: string; location?: unknown; requestedEnergyWh?: number }[];
+      origin?: unknown;
+      departAt?: number;
+      assumedSpeedKmh?: number;
+      dryRun?: boolean;
+    };
+
+    if (!Array.isArray(body.legs) || body.legs.length === 0) {
+      throw new HttpError(400, 'legs must be a non-empty array');
+    }
+    const legs: UnresolvedLeg[] = body.legs.map((leg, i) => {
+      if (!leg.providerId || !leg.requestedEnergyWh || !isLatLng(leg.location)) {
+        throw new HttpError(400, `legs[${i}] must have providerId, location {lat,lng}, and requestedEnergyWh`);
+      }
+      return { providerId: leg.providerId, location: leg.location, requestedEnergyWh: leg.requestedEnergyWh };
+    });
+    if (body.origin !== undefined && !isLatLng(body.origin)) {
+      throw new HttpError(400, 'origin, if given, must be {lat,lng}');
+    }
+
+    const assumedSpeedKmh = body.assumedSpeedKmh ?? DEFAULT_ASSUMED_SPEED_KMH;
+    if (assumedSpeedKmh < MIN_SPEED || assumedSpeedKmh > MAX_SPEED) {
+      throw new HttpError(400, `assumedSpeedKmh must be between ${MIN_SPEED} and ${MAX_SPEED}`);
+    }
+    const departAt = body.departAt ?? Math.floor(Date.now() / 1000);
+
+    const outcome = await resolveLegs(identity, legs, departAt, assumedSpeedKmh, body.origin);
+    if ('failedLegIndex' in outcome) {
+      res.status(409).json(outcome);
+      return;
+    }
+
+    // §3.4: windowEnd is never sent, only windowStart -- the chaincode
+    // derives windowEnd itself from requestedEnergyWh and the bound
+    // charger's rated power. §7.2/7.3: providerId, slotIndex, and
+    // windowStart identify where and when the driver will be, so they
+    // travel as transient data (field "legs"), never as a regular argument;
+    // requestedEnergyWh is public and travels as the regular argument,
+    // index-aligned with the transient array.
+    const publicLegsJSON = JSON.stringify(outcome.resolved.map((leg) => leg.requestedEnergyWh));
+    const privateLegsJSON = JSON.stringify(
+      outcome.resolved.map((leg) => ({
+        providerId: leg.providerId,
+        slotIndex: leg.slotIndex,
+        windowStart: leg.windowStart,
+      }))
+    );
+
+    let reservationIds: string[];
+    try {
+      // dryRun runs the exact same ReserveTripLegs validation
+      // (§4.1 steps 1-10) via evaluate, so nothing commits but the preview
+      // reflects real chaincode-side checks, not a gateway reimplementation
+      // of them (§6.4).
+      const raw = body.dryRun
+        ? await withTransientContract(identity, (contract) =>
+            contract.evaluate('ReserveTripLegs', {
+              arguments: [publicLegsJSON],
+              transientData: { legs: privateLegsJSON },
+            })
+          )
+        : await withTransientContract(identity, (contract) =>
+            contract.submit('ReserveTripLegs', {
+              arguments: [publicLegsJSON],
+              transientData: { legs: privateLegsJSON },
+            })
+          );
+      reservationIds = JSON.parse(Buffer.from(raw).toString('utf8')) as string[];
+    } catch (err) {
+      const failure = parseTripLegError(err);
+      if (failure) {
+        res.status(409).json(failure);
+        return;
+      }
+      throw err;
+    }
+
+    res.json({
+      reservationIds,
+      totalHold: outcome.totalHold,
+      windowSource: 'deterministic' as const,
+      windows: outcome.resolved.map((l) => ({
+        providerId: l.providerId,
+        slotIndex: l.slotIndex,
+        windowStart: l.windowStart,
+        windowEnd: l.windowEnd,
+      })),
+    });
+  })
+);
+
+tripPlanRouter.post(
+  '/trip/plan/cancel',
+  asyncHandler(async (req, res) => {
+    const identity = requireIdentity(req);
+    const { reservationIds } = (req.body ?? {}) as { reservationIds?: string[] };
+    if (!Array.isArray(reservationIds) || reservationIds.length === 0) {
+      throw new HttpError(400, 'reservationIds must be a non-empty array');
+    }
+
+    const result = await withContract(identity, (contract) =>
+      contract.submitTransaction('CancelTripLegs', JSON.stringify(reservationIds))
+    );
+    const refunded = JSON.parse(Buffer.from(result).toString('utf8')) as number;
+    res.json({ refunded });
   })
 );

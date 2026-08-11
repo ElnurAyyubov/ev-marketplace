@@ -14,6 +14,10 @@ export interface PlanConstraints {
   maxPricePerkWh?: number;
   approvalRequired?: boolean;
   connectorTypes?: string[];
+  // Not part of TRIP_PLANNER_ADDENDUM.md's original filter set; added for
+  // TRIP_RESERVATION_ADDENDUM.md §10's re-plan-around-a-conflict loop, which
+  // assumes the planner can exclude a specific provider on retry.
+  excludeProviders?: string[];
 }
 
 export interface PlannedStop {

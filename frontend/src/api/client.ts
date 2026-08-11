@@ -2,14 +2,26 @@ import {
   Charger,
   ChargingProvider,
   Identity,
+  LatLng,
   PlanConstraints,
   Reading,
   Reservation,
   Session,
   Slot,
   TripPlan,
+  TripReserveLeg,
+  TripReserveResult,
   User,
 } from './types';
+
+// Preserves the response body (not just a flattened message) so callers that
+// need structured error data -- the trip-reservation re-plan loop reading a
+// 409's {failedLegIndex, providerId, reason} -- don't have to re-parse it.
+export class ApiError extends Error {
+  constructor(public status: number, public body: unknown, message: string) {
+    super(message);
+  }
+}
 
 const BASE_URL = import.meta.env.VITE_GATEWAY_URL || '';
 
@@ -40,7 +52,8 @@ async function request<T>(
 
   if (!res.ok) {
     const payload = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(payload.error || `request failed with status ${res.status}`);
+    const message = typeof payload?.error === 'string' ? payload.error : `request failed with status ${res.status}`;
+    throw new ApiError(res.status, payload, message);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -185,4 +198,19 @@ export const api = {
 
   planTripNl: (identity: Identity, query: string) =>
     request<{ plan: TripPlan; narration?: string }>(identity, 'POST', '/trip/plan/nl', { query }),
+
+  // Trip reservation (TRIP_RESERVATION_ADDENDUM.md section 6).
+  reserveTrip: (
+    identity: Identity,
+    payload: {
+      legs: TripReserveLeg[];
+      origin?: LatLng;
+      departAt?: number;
+      assumedSpeedKmh?: number;
+      dryRun?: boolean;
+    }
+  ) => request<TripReserveResult>(identity, 'POST', '/trip/plan/reserve', payload),
+
+  cancelTrip: (identity: Identity, reservationIds: string[]) =>
+    request<{ refunded: number }>(identity, 'POST', '/trip/plan/cancel', { reservationIds }),
 };

@@ -101,3 +101,15 @@ export async function withContract<T>(
     gateway.close();
   }
 }
+
+/**
+ * Same connection lifecycle as withContract -- the Contract it hands to `fn`
+ * already supports transient data via contract.evaluate()/contract.submit()
+ * with a `transientData` option. Kept as a distinctly-named export per
+ * TRIP_RESERVATION_ADDENDUM.md section 7.3, so a call site that submits
+ * private (transient) data -- CreateReservation's providerId/slotId,
+ * ReserveTripLegs' per-leg providerId/slotIndex/windowStart -- is visually
+ * distinguishable from one that doesn't, without having to read the
+ * callback body.
+ */
+export const withTransientContract = withContract;

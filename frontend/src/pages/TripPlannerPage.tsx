@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { api } from '../api/client';
-import { PlanConstraints, TripPlan } from '../api/types';
+import { api, ApiError } from '../api/client';
+import { PlanConstraints, TripLegFailure, TripPlan, TripReserveResult } from '../api/types';
 import { LocationPickerMap } from '../components/LocationPickerMap';
 import { TripPlanMap } from '../components/TripPlanMap';
 import { useIdentity } from '../context/IdentityContext';
@@ -13,6 +13,29 @@ type EndpointMode = 'text' | 'map';
 
 const DEFAULT_LAT = 40.73;
 const DEFAULT_LNG = -73.935;
+const DEFAULT_ENERGY_PER_STOP_KWH = '20';
+const MAX_REPLAN_ATTEMPTS = 3;
+
+/**
+ * The planner has no battery model (TRIP_PLANNER_ADDENDUM.md), so nothing
+ * upstream knows how much energy a stop should deliver. TRIP_RESERVATION_ADDENDUM.md
+ * doesn't specify this UI either, so this asks for one uniform amount applied
+ * to every stop -- simplest thing that lets ReserveTripLegs' per-leg
+ * requestedEnergyWh actually get filled in.
+ */
+function extractTripLegFailure(err: unknown): TripLegFailure | undefined {
+  if (!(err instanceof ApiError) || err.status !== 409) return undefined;
+  const body = err.body as Record<string, unknown> | null;
+  if (
+    body &&
+    typeof body.failedLegIndex === 'number' &&
+    typeof body.providerId === 'string' &&
+    typeof body.reason === 'string'
+  ) {
+    return { failedLegIndex: body.failedLegIndex, providerId: body.providerId, reason: body.reason };
+  }
+  return undefined;
+}
 
 export function TripPlannerPage({ onSelectProvider }: Props) {
   const { identity } = useIdentity();
@@ -35,6 +58,12 @@ export function TripPlannerPage({ onSelectProvider }: Props) {
   const [plan, setPlan] = useState<TripPlan | null>(null);
   const [narration, setNarration] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+
+  const [energyPerStopKwh, setEnergyPerStopKwh] = useState(DEFAULT_ENERGY_PER_STOP_KWH);
+  const [reserving, setReserving] = useState(false);
+  const [reservePreview, setReservePreview] = useState<TripReserveResult | null>(null);
+  const [reserveResult, setReserveResult] = useState<TripReserveResult | null>(null);
+  const [reserveError, setReserveError] = useState<string | null>(null);
 
   const buildConstraints = (): PlanConstraints => ({
     providerType: type ? (type as PlanConstraints['providerType']) : undefined,
@@ -95,6 +124,94 @@ export function TripPlannerPage({ onSelectProvider }: Props) {
     } finally {
       setNlLoading(false);
     }
+  };
+
+  const buildLegs = (p: TripPlan) => {
+    const requestedEnergyWh = Math.round(Number(energyPerStopKwh) * 1000);
+    return p.stops.map((s) => ({
+      providerId: s.providerId,
+      location: s.location,
+      requestedEnergyWh,
+    }));
+  };
+
+  const previewReserve = async () => {
+    if (!plan || plan.status !== 'feasible') return;
+    setReserveError(null);
+    setReserveResult(null);
+    setReserving(true);
+    try {
+      const preview = await api.reserveTrip(identity, {
+        legs: buildLegs(plan),
+        origin: { lat: plan.origin.lat, lng: plan.origin.lng },
+        dryRun: true,
+      });
+      setReservePreview(preview);
+    } catch (err) {
+      setReserveError((err as Error).message);
+    } finally {
+      setReserving(false);
+    }
+  };
+
+  // §10: on a 409 for a specific leg, re-plan excluding that provider,
+  // recompute the entire window array from departAt (never patch the failed
+  // leg in place -- a swapped stop changes every subsequent leg's arrival
+  // time), and resubmit. Capped at MAX_REPLAN_ATTEMPTS, then a clean failure
+  // naming the contested stop.
+  const confirmReserve = async () => {
+    if (!plan || plan.status !== 'feasible') return;
+    setReserving(true);
+    setReserveError(null);
+
+    let currentPlan = plan;
+    const excluded: string[] = [];
+
+    try {
+      for (let attempt = 0; attempt <= MAX_REPLAN_ATTEMPTS; attempt++) {
+        try {
+          const result = await api.reserveTrip(identity, {
+            legs: buildLegs(currentPlan),
+            origin: { lat: currentPlan.origin.lat, lng: currentPlan.origin.lng },
+            dryRun: false,
+          });
+          setPlan(currentPlan);
+          setReserveResult(result);
+          setReservePreview(null);
+          return;
+        } catch (err) {
+          const failure = extractTripLegFailure(err);
+          if (!failure || failure.failedLegIndex < 0 || attempt === MAX_REPLAN_ATTEMPTS) {
+            throw err;
+          }
+
+          excluded.push(failure.providerId);
+          const replanned = await api.planTrip(identity, {
+            origin: currentPlan.origin,
+            destination: currentPlan.destination,
+            maxLegKm: currentPlan.maxLegKm,
+            constraints: { ...currentPlan.constraints, excludeProviders: excluded },
+          });
+          if (replanned.status !== 'feasible') {
+            throw new Error(
+              `${failure.providerId} is no longer available (${failure.reason}), and no alternative route was found: ${
+                replanned.reason ?? 'no feasible route'
+              }`
+            );
+          }
+          currentPlan = replanned;
+        }
+      }
+    } catch (err) {
+      setReserveError((err as Error).message);
+    } finally {
+      setReserving(false);
+    }
+  };
+
+  const cancelPreview = () => {
+    setReservePreview(null);
+    setReserveError(null);
   };
 
   return (
@@ -252,6 +369,63 @@ export function TripPlannerPage({ onSelectProvider }: Props) {
 
           {plan.status === 'no_feasible_route' && plan.stops.length === 0 && (
             <p style={{ color: '#666' }}>No stops could be planned before the route dead-ended.</p>
+          )}
+
+          {plan.status === 'feasible' && plan.stops.length > 0 && (
+            <div style={{ marginTop: 16, borderTop: '1px solid #e2e2e2', paddingTop: 16 }}>
+              <h3>Reserve all stops</h3>
+              <div className="field">
+                <label>Energy per stop (kWh)</label>
+                <input
+                  style={{ maxWidth: 120 }}
+                  type="number"
+                  min="1"
+                  value={energyPerStopKwh}
+                  onChange={(e) => setEnergyPerStopKwh(e.target.value)}
+                />
+              </div>
+
+              {!reservePreview && !reserveResult && (
+                <button onClick={previewReserve} disabled={reserving}>
+                  {reserving ? 'Checking availability…' : 'Reserve all stops'}
+                </button>
+              )}
+              {reserveError && <p className="error">{reserveError}</p>}
+
+              {reservePreview && (
+                <div style={{ background: '#f5f6f8', padding: 10, borderRadius: 6 }}>
+                  <p>
+                    <strong>Total hold: {reservePreview.totalHold}</strong> &middot; window source:{' '}
+                    {reservePreview.windowSource}
+                  </p>
+                  {reservePreview.windows.map((w, i) => (
+                    <p key={`${w.providerId}-${w.slotIndex}`} style={{ margin: '4px 0' }}>
+                      Stop {i + 1} ({w.providerId}, slot {w.slotIndex}): {new Date(w.windowStart * 1000).toLocaleString()} –{' '}
+                      {new Date(w.windowEnd * 1000).toLocaleString()}
+                    </p>
+                  ))}
+                  <div className="row">
+                    <button onClick={confirmReserve} disabled={reserving}>
+                      {reserving ? 'Booking…' : 'Confirm booking'}
+                    </button>
+                    <button className="secondary" onClick={cancelPreview} disabled={reserving}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {reserveResult && (
+                <div style={{ background: '#eef8ee', padding: 10, borderRadius: 6 }}>
+                  <p>
+                    Booked {reserveResult.reservationIds.length} reservation
+                    {reserveResult.reservationIds.length === 1 ? '' : 's'} &middot; total hold{' '}
+                    {reserveResult.totalHold}.
+                  </p>
+                  <p style={{ fontSize: 13, color: '#666' }}>See My Reservations for status and cancellation.</p>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
