@@ -4,6 +4,7 @@ import express from 'express';
 import path from 'path';
 import { startReservationExpiryWorker } from './expiryWorker';
 import { chargersRouter } from './routes/chargers';
+import { devDemoRouter } from './routes/devDemo';
 import { nlSearchRouter } from './routes/nlSearch';
 import { providersRouter } from './routes/providers';
 import { reservationsRouter } from './routes/reservations';
@@ -32,6 +33,7 @@ app.use(reservationsRouter);
 app.use(sessionsRouter);
 app.use(tokenRouter);
 app.use(tripPlanRouter);
+if (process.env.ENABLE_DEV_DEMO) app.use(devDemoRouter); // DEMO-HOOK
 const FRONTEND_DIST = process.env.FRONTEND_DIST_DIR || path.join(__dirname, '..', '..', 'frontend', 'dist');
 app.use(express.static(FRONTEND_DIST));
 app.get('*', (_req, res) => res.sendFile(path.join(FRONTEND_DIST, 'index.html')));

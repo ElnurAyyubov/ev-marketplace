@@ -35,7 +35,11 @@ export const setupApi = {
     }),
 };
 
-async function request<T>(
+// Exported (not just used internally) so frontend/src/demo/api.ts -- kept
+// out of this shared file entirely, see that file's header -- can build
+// dev-only demo requests through the same request/error-handling path
+// without duplicating it.
+export async function request<T>(
   identity: Identity,
   method: string,
   path: string,

@@ -1,4 +1,5 @@
 import L from 'leaflet';
+import { ReactNode } from 'react';
 import { MapContainer, Marker, Polyline, Popup, TileLayer } from 'react-leaflet';
 import { TripPlan } from '../api/types';
 
@@ -29,9 +30,10 @@ const destinationPin = pin('#b00020');
 
 interface Props {
   plan: TripPlan;
+  overlay?: ReactNode;
 }
 
-export function TripPlanMap({ plan }: Props) {
+export function TripPlanMap({ plan, overlay }: Props) {
   const path: [number, number][] = plan.roadGeometry
     ? plan.roadGeometry.map((p) => [p.lat, p.lng])
     : [
@@ -65,6 +67,7 @@ export function TripPlanMap({ plan }: Props) {
         <Marker position={[plan.destination.lat, plan.destination.lng]} icon={destinationPin}>
           <Popup>Destination{plan.destination.label ? `: ${plan.destination.label}` : ''}</Popup>
         </Marker>
+        {overlay}
       </MapContainer>
     </div>
   );
