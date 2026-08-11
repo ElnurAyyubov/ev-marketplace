@@ -125,6 +125,35 @@ public final class ChaincodeUtil {
         return ctx.getStub().getTxTimestamp().getEpochSecond();
     }
 
+    /**
+     * Marshals v and writes it to key in a private data collection
+     * (TRIP_RESERVATION_ADDENDUM.md section 7). Fabric stores only
+     * hash(key)/hash(value) for private data on the public ledger; the
+     * cleartext lives solely in the collection, replicated only to its
+     * member orgs' peers.
+     */
+    public static void putPrivateJSON(final Context ctx, final String collection, final String key, final Object v) {
+        ctx.getStub().putPrivateData(collection, key, GENSON.serialize(v));
+    }
+
+    /** Reads and unmarshals a private data collection entry. Throws if the key does not exist. */
+    public static <T> T getPrivateJSON(final Context ctx, final String collection, final String key, final Class<T> type) {
+        String json = ctx.getStub().getPrivateDataUTF8(collection, key);
+        if (json == null || json.isEmpty()) {
+            throw new ChaincodeException("no private state found for key " + key + " in collection " + collection);
+        }
+        return GENSON.deserialize(json, type);
+    }
+
+    /** Reads a byte[] value out of a transaction's transient map, or throws a clear error if absent. */
+    public static byte[] getTransientOrThrow(final Context ctx, final String field) {
+        byte[] v = ctx.getStub().getTransient().get(field);
+        if (v == null || v.length == 0) {
+            throw new ChaincodeException("transient field '" + field + "' is required");
+        }
+        return v;
+    }
+
     public static ChaincodeStub stub(final Context ctx) {
         return ctx.getStub();
     }

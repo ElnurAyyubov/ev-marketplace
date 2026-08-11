@@ -16,10 +16,11 @@ CC_VERSION="${CC_VERSION:-3.1}"
 # for every definition change on this channel, even across a language swap.
 # Bump this if you redeploy again. Check the current committed sequence with:
 #   peer lifecycle chaincode querycommitted --channelID <channel> --name marketplace
-CC_SEQUENCE="${CC_SEQUENCE:-5}"
+CC_SEQUENCE="${CC_SEQUENCE:-6}"
 
 cd "${TEST_NETWORK_DIR}"
-./network.sh deployCC -c "${CHANNEL_NAME}" -ccn "${CC_NAME}" -ccp "${CHAINCODE_DIR}" -ccl java -ccv "${CC_VERSION}" -ccs "${CC_SEQUENCE}"
+./network.sh deployCC -c "${CHANNEL_NAME}" -ccn "${CC_NAME}" -ccp "${CHAINCODE_DIR}" -ccl java -ccv "${CC_VERSION}" -ccs "${CC_SEQUENCE}" \
+  -cccg "${CHAINCODE_DIR}/collections_config.json"
 
 echo ""
 echo "Chaincode '${CC_NAME}' deployed on channel '${CHANNEL_NAME}'."

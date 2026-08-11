@@ -3,8 +3,8 @@
  */
 package marketplace;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -372,12 +372,65 @@ public final class SmartContract implements ContractInterface {
 
     // ==================== Reservations ====================
 
+    /** Reads and merges a reservation's public record and private trajectory (section 7.2) into the full view. */
     private Reservation getReservationOrThrow(final Context ctx, final String reservationId) {
+        ReservationPublic pub;
         try {
-            return ChaincodeUtil.getJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservationId), Reservation.class);
+            pub = ChaincodeUtil.getJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservationId), ReservationPublic.class);
         } catch (ChaincodeException e) {
             throw new ChaincodeException("reservation " + reservationId + " not found");
         }
+        ReservationTrajectory traj = ChaincodeUtil.getPrivateJSON(
+                ctx, Constants.TRAJECTORY_COLLECTION, ChaincodeUtil.reservationKey(ctx, reservationId), ReservationTrajectory.class);
+        return mergeReservation(pub, traj);
+    }
+
+    private Reservation mergeReservation(final ReservationPublic pub, final ReservationTrajectory traj) {
+        Reservation r = new Reservation();
+        r.setDocType(Constants.DOC_TYPE_RESERVATION);
+        r.setReservationId(pub.getReservationId());
+        r.setDriverId(pub.getDriverId());
+        r.setRequestedEnergy(pub.getRequestedEnergy());
+        r.setEscrowAmount(pub.getEscrowAmount());
+        r.setState(pub.getState());
+        r.setCreatedAt(pub.getCreatedAt());
+        r.setProviderId(traj.getProviderId());
+        r.setSlotId(traj.getSlotId());
+        r.setWindowStart(traj.getWindowStart());
+        r.setWindowEnd(traj.getWindowEnd());
+        r.setExpiresAt(traj.getExpiresAt());
+        return r;
+    }
+
+    /**
+     * Splits a fully-populated Reservation view and writes its two halves
+     * (section 7.2): the public record to world state, the trajectory
+     * (providerId, slotId, windowStart, windowEnd, expiresAt) to the private
+     * collection. Every reservation write goes through this -- there is no
+     * path that writes the trajectory-revealing fields to public state.
+     */
+    private void putReservation(final Context ctx, final Reservation reservation) {
+        String key = ChaincodeUtil.reservationKey(ctx, reservation.getReservationId());
+
+        ReservationPublic pub = new ReservationPublic();
+        pub.setDocType(Constants.DOC_TYPE_RESERVATION);
+        pub.setReservationId(reservation.getReservationId());
+        pub.setDriverId(reservation.getDriverId());
+        pub.setRequestedEnergy(reservation.getRequestedEnergy());
+        pub.setEscrowAmount(reservation.getEscrowAmount());
+        pub.setState(reservation.getState());
+        pub.setCreatedAt(reservation.getCreatedAt());
+        ChaincodeUtil.putJSON(ctx, key, pub);
+
+        ReservationTrajectory traj = new ReservationTrajectory();
+        traj.setDocType(Constants.DOC_TYPE_RESERVATION_TRAJECTORY);
+        traj.setReservationId(reservation.getReservationId());
+        traj.setProviderId(reservation.getProviderId());
+        traj.setSlotId(reservation.getSlotId());
+        traj.setWindowStart(reservation.getWindowStart());
+        traj.setWindowEnd(reservation.getWindowEnd());
+        traj.setExpiresAt(reservation.getExpiresAt());
+        ChaincodeUtil.putPrivateJSON(ctx, Constants.TRAJECTORY_COLLECTION, key, traj);
     }
 
     private Slot getSlotOrThrow(final Context ctx, final String providerId, final String slotId) {
@@ -414,19 +467,63 @@ public final class SmartContract implements ContractInterface {
     }
 
     /**
+     * TRIP_RESERVATION_ADDENDUM.md section 3.4, integer arithmetic only.
+     * windowEnd is always derived here, never accepted from a client -- a
+     * client-supplied windowEnd would let a driver block a competitor's
+     * charger for the price of one reservation.
+     */
+    private long deriveWindowEnd(final long windowStart, final long requestedEnergyWh, final int ratedPowerKw) {
+        long chargeSeconds = requestedEnergyWh * 3600L / ((long) ratedPowerKw * 1000L);
+        return windowStart + chargeSeconds + Constants.WINDOW_BUFFER_SECONDS;
+    }
+
+    /**
+     * Enumerates the booking buckets a [windowStart, windowEnd) window
+     * spans (section 3.4), rejecting windows wider than MAX_BUCKETS_PER_LEG
+     * to bound the write set (and MVCC conflict surface) of a single leg.
+     */
+    private List<Long> bucketsInWindow(final long windowStart, final long windowEnd) {
+        long firstBucket = ChaincodeUtil.floorToBucket(windowStart);
+        long lastBucket = ChaincodeUtil.floorToBucket(windowEnd - 1);
+        long bucketCount = (lastBucket - firstBucket) / Constants.BOOKING_BUCKET_SECONDS + 1;
+        if (bucketCount > Constants.MAX_BUCKETS_PER_LEG) {
+            throw new ChaincodeException(
+                    "requested window spans " + bucketCount + " buckets, exceeding the " + Constants.MAX_BUCKETS_PER_LEG + "-bucket limit");
+        }
+        List<Long> buckets = new ArrayList<>();
+        for (long bucketStart = firstBucket; bucketStart <= lastBucket; bucketStart += Constants.BOOKING_BUCKET_SECONDS) {
+            buckets.add(bucketStart);
+        }
+        return buckets;
+    }
+
+    /**
      * Reserves a free slot for the calling driver. Escrow is locked
      * immediately if the provider does not require owner approval; otherwise
-     * the reservation waits in REQUESTED state. Either way this call claims
-     * the booking bucket containing `now` as part of the transaction
-     * (TRIP_RESERVATION_ADDENDUM.md section 3), so a losing concurrent
-     * CreateReservation over the same bucket fails cleanly instead of double
-     * booking (Fabric's MVCC read-set on the booking key invalidates the
-     * loser's transaction at commit time).
+     * the reservation waits in REQUESTED state. Either way this call derives
+     * a charge window starting at `now` (TRIP_RESERVATION_ADDENDUM.md
+     * section 3.4) and claims every booking bucket it spans, so a losing
+     * concurrent CreateReservation over any shared bucket fails cleanly
+     * instead of double booking (Fabric's MVCC read-set on the booking key
+     * invalidates the loser's transaction at commit time).
+     *
+     * providerId and slotId arrive as transient data (field "leg", a JSON
+     * object {providerId, slotId}), not as regular arguments -- section 7.3:
+     * they identify where the driver will be, so they must never land in the
+     * block in cleartext. requestedEnergy is public and stays a regular
+     * argument.
      */
     @Transaction(intent = Transaction.TYPE.SUBMIT)
-    public String CreateReservation(final Context ctx, final String providerId, final String slotId, final int requestedEnergy) {
+    public String CreateReservation(final Context ctx, final int requestedEnergy) {
         if (requestedEnergy <= 0) {
             throw new ChaincodeException("requestedEnergy must be positive");
+        }
+        CreateReservationInput leg = ChaincodeUtil.fromJSON(
+                new String(ChaincodeUtil.getTransientOrThrow(ctx, "leg"), StandardCharsets.UTF_8), CreateReservationInput.class);
+        String providerId = leg.getProviderId();
+        String slotId = leg.getSlotId();
+        if (providerId == null || providerId.isEmpty() || slotId == null || slotId.isEmpty()) {
+            throw new ChaincodeException("transient field 'leg' must include providerId and slotId");
         }
         String driverId = ChaincodeUtil.getCallerID(ctx);
 
@@ -436,8 +533,16 @@ public final class SmartContract implements ContractInterface {
         }
 
         Slot slot = getSlotOrThrow(ctx, providerId, slotId);
+        Charger charger = getChargerBoundToSlot(ctx, providerId, Integer.parseInt(slotId));
+
         long now = ChaincodeUtil.txNow(ctx);
-        claimBucket(ctx, providerId, slotId, ChaincodeUtil.floorToBucket(now));
+        long windowStart = now;
+        long requestedEnergyWh = (long) requestedEnergy * 1000L;
+        long windowEnd = deriveWindowEnd(windowStart, requestedEnergyWh, charger.getRatedPowerKw());
+        List<Long> buckets = bucketsInWindow(windowStart, windowEnd);
+        for (long bucketStart : buckets) {
+            claimBucket(ctx, providerId, slotId, bucketStart);
+        }
 
         long escrowAmount = (long) requestedEnergy * provider.getPricePerkWh();
         // check whether the buyer has enough money to set to escrow
@@ -467,11 +572,16 @@ public final class SmartContract implements ContractInterface {
         reservation.setEscrowAmount(state.equals(Constants.RESERVATION_STATE_CONFIRMED) ? escrowAmount : 0);
         reservation.setState(state);
         reservation.setCreatedAt(now);
-        long timeoutSeconds = Constants.RESERVATION_STATE_CONFIRMED.equals(state)
-                ? Constants.SESSION_START_TIMEOUT_SECONDS
-                : Constants.RESERVATION_TIMEOUT_SECONDS;
-        reservation.setExpiresAt(now + timeoutSeconds);
-        ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservationId), reservation);
+        reservation.setWindowStart(windowStart);
+        reservation.setWindowEnd(windowEnd);
+        // REQUESTED keeps the existing owner-approval timeout; CONFIRMED's
+        // start deadline is now anchored to the charge window, not creation
+        // time (section 9) -- for a walk-up reservation windowStart == now,
+        // so this is numerically identical to the old 15-minute-from-creation deadline.
+        reservation.setExpiresAt(Constants.RESERVATION_STATE_CONFIRMED.equals(state)
+                ? windowStart + Constants.WINDOW_GRACE_SECONDS
+                : now + Constants.RESERVATION_TIMEOUT_SECONDS);
+        putReservation(ctx, reservation);
 
         // occupied is now a derived display flag (GetSlots); exclusivity for
         // this bucket was already established above by claimBucket.
@@ -513,8 +623,11 @@ public final class SmartContract implements ContractInterface {
 
         reservation.setState(Constants.RESERVATION_STATE_CONFIRMED);
         reservation.setEscrowAmount(escrowAmount);
-        reservation.setExpiresAt(now + Constants.SESSION_START_TIMEOUT_SECONDS);
-        ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservationId), reservation);
+        // Anchored to the already-claimed charge window (section 9), not to
+        // approval time -- the buckets held since creation were claimed for
+        // windowStart, not for whenever the owner happens to approve.
+        reservation.setExpiresAt(reservation.getWindowStart() + Constants.WINDOW_GRACE_SECONDS);
+        putReservation(ctx, reservation);
     }
 
     /** Cancels a REQUESTED or CONFIRMED reservation, refunding any locked escrow and freeing the slot. */
@@ -538,8 +651,216 @@ public final class SmartContract implements ContractInterface {
         }
 
         reservation.setState(Constants.RESERVATION_STATE_CANCELLED);
-        ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservationId), reservation);
+        putReservation(ctx, reservation);
         freeSlot(ctx, reservation);
+    }
+
+    /**
+     * Books an entire itinerary atomically (TRIP_RESERVATION_ADDENDUM.md
+     * section 4). All legs are validated before anything is written; any
+     * failure throws, which discards the whole write set, so there is never
+     * a half-booked trip. Excludes approval-required providers (section 5,
+     * fork 1a) -- the "whole trip is booked" guarantee isn't achievable when
+     * a leg would enter REQUESTED and wait on a human. Errors are
+     * pipe-delimited (`CODE|legIndex|providerId|message`, legIndex/providerId
+     * empty for whole-trip failures) so the gateway can identify and re-plan
+     * around the offending leg.
+     *
+     * requestedEnergyWhJSON (a JSON array of Wh amounts, public per section
+     * 7.2) is a regular argument. providerId/slotIndex/windowStart per leg
+     * arrive as transient data (field "legs", a JSON array of
+     * {providerId, slotIndex, windowStart}, index-aligned with the public
+     * array) -- section 7.3, same rationale as CreateReservation.
+     */
+    @Transaction(intent = Transaction.TYPE.SUBMIT)
+    public String ReserveTripLegs(final Context ctx, final String requestedEnergyWhJSON) {
+        long[] requestedEnergyWhList = ChaincodeUtil.fromJSON(requestedEnergyWhJSON, long[].class);
+        TripLegPrivateInput[] privateLegs = ChaincodeUtil.fromJSON(
+                new String(ChaincodeUtil.getTransientOrThrow(ctx, "legs"), StandardCharsets.UTF_8), TripLegPrivateInput[].class);
+        if (requestedEnergyWhList == null || privateLegs == null || requestedEnergyWhList.length != privateLegs.length) {
+            throw new ChaincodeException("TRIP_INVALID_LEG_COUNT|-1||public and private leg arrays must be the same, non-zero length");
+        }
+        TripLegInput[] legs = new TripLegInput[privateLegs.length];
+        for (int i = 0; i < legs.length; i++) {
+            TripLegInput leg = new TripLegInput();
+            leg.setProviderId(privateLegs[i].getProviderId());
+            leg.setSlotIndex(privateLegs[i].getSlotIndex());
+            leg.setWindowStart(privateLegs[i].getWindowStart());
+            leg.setRequestedEnergyWh(requestedEnergyWhList[i]);
+            legs[i] = leg;
+        }
+        if (legs.length < 1 || legs.length > Constants.MAX_TRIP_LEGS) {
+            throw new ChaincodeException("TRIP_INVALID_LEG_COUNT|-1||must submit between 1 and " + Constants.MAX_TRIP_LEGS + " legs");
+        }
+
+        String driverId = ChaincodeUtil.getCallerID(ctx);
+        long now = ChaincodeUtil.txNow(ctx);
+
+        if (legs[0].getWindowStart() < now - Constants.CLOCK_SKEW_TOLERANCE_SECONDS) {
+            throw new ChaincodeException("TRIP_LEG_WINDOW_PAST|0|" + legs[0].getProviderId() + "|windowStart is before the allowed clock-skew tolerance");
+        }
+        int lastLeg = legs.length - 1;
+        if (legs[lastLeg].getWindowStart() > now + Constants.MAX_ADVANCE_BOOKING_SECONDS) {
+            throw new ChaincodeException("TRIP_LEG_WINDOW_TOO_FAR|" + lastLeg + "|" + legs[lastLeg].getProviderId()
+                    + "|windowStart exceeds the " + Constants.MAX_ADVANCE_BOOKING_SECONDS + "s advance-booking limit");
+        }
+
+        // Pass 1 (validation steps 3, 6, 7, 8): resolve each leg's provider
+        // and charger, derive its window, and check strictly-increasing
+        // ordering against the previous leg -- all before any bucket or
+        // balance check, so a shape/eligibility error is reported first.
+        ChargingProvider[] providers = new ChargingProvider[legs.length];
+        long[] windowEnds = new long[legs.length];
+        List<List<Long>> bucketsPerLeg = new ArrayList<>();
+        long previousWindowEnd = Long.MIN_VALUE;
+
+        for (int i = 0; i < legs.length; i++) {
+            TripLegInput leg = legs[i];
+            if (i > 0 && leg.getWindowStart() < previousWindowEnd) {
+                throw new ChaincodeException("TRIP_LEG_WINDOW_ORDER|" + i + "|" + leg.getProviderId()
+                        + "|windowStart must be at or after the previous leg's derived windowEnd (" + previousWindowEnd + ")");
+            }
+
+            ChargingProvider provider;
+            try {
+                provider = GetProvider(ctx, leg.getProviderId());
+            } catch (ChaincodeException e) {
+                throw new ChaincodeException("TRIP_LEG_PROVIDER_UNAVAILABLE|" + i + "|" + leg.getProviderId() + "|provider not found");
+            }
+            if (!Constants.PROVIDER_STATUS_ACTIVE.equals(provider.getStatus())) {
+                throw new ChaincodeException("TRIP_LEG_PROVIDER_UNAVAILABLE|" + i + "|" + leg.getProviderId() + "|provider is not active");
+            }
+            if (provider.isApprovalRequired()) {
+                throw new ChaincodeException("TRIP_LEG_APPROVAL_REQUIRED|" + i + "|" + leg.getProviderId() + "|provider requires manual approval");
+            }
+
+            Charger charger;
+            try {
+                charger = getChargerBoundToSlot(ctx, leg.getProviderId(), leg.getSlotIndex());
+            } catch (ChaincodeException e) {
+                throw new ChaincodeException("TRIP_LEG_NO_CHARGER|" + i + "|" + leg.getProviderId() + "|no charger registered on slot " + leg.getSlotIndex());
+            }
+
+            long windowEnd = deriveWindowEnd(leg.getWindowStart(), leg.getRequestedEnergyWh(), charger.getRatedPowerKw());
+            List<Long> buckets;
+            try {
+                buckets = bucketsInWindow(leg.getWindowStart(), windowEnd);
+            } catch (ChaincodeException e) {
+                throw new ChaincodeException("TRIP_LEG_WINDOW_TOO_LONG|" + i + "|" + leg.getProviderId() + "|" + e.getMessage());
+            }
+
+            providers[i] = provider;
+            windowEnds[i] = windowEnd;
+            bucketsPerLeg.add(buckets);
+            previousWindowEnd = windowEnd;
+        }
+
+        // Pass 2 (validation step 9): every bucket must still be free. A
+        // separate pass so all windows are known-valid before any conflict
+        // is reported, and so no bucket is claimed until every leg clears.
+        for (int i = 0; i < legs.length; i++) {
+            TripLegInput leg = legs[i];
+            String slotId = Integer.toString(leg.getSlotIndex());
+            for (long bucketStart : bucketsPerLeg.get(i)) {
+                if (isBucketClaimed(ctx, leg.getProviderId(), slotId, bucketStart)) {
+                    throw new ChaincodeException("TRIP_LEG_CONFLICT|" + i + "|" + leg.getProviderId() + "|slot booked at bucket start " + bucketStart);
+                }
+            }
+        }
+
+        // Validation step 10: one combined balance check for the whole trip.
+        long totalCost = 0;
+        for (int i = 0; i < legs.length; i++) {
+            totalCost += legs[i].getRequestedEnergyWh() * providers[i].getPricePerkWh() / 1000;
+        }
+        long balance = TokenLedger.getBalance(ctx, driverId);
+        if (totalCost > balance) {
+            throw new ChaincodeException("TRIP_INSUFFICIENT_BALANCE|-1||need " + totalCost + ", have " + balance);
+        }
+
+        // Step 11: write everything. Every leg above has already been
+        // validated, so nothing here can fail for a business reason; only
+        // the single balance debit happens once, for the summed cost.
+        List<String> reservationIds = new ArrayList<>();
+        for (int i = 0; i < legs.length; i++) {
+            TripLegInput leg = legs[i];
+            String slotId = Integer.toString(leg.getSlotIndex());
+            for (long bucketStart : bucketsPerLeg.get(i)) {
+                claimBucket(ctx, leg.getProviderId(), slotId, bucketStart);
+            }
+
+            long legCost = legs[i].getRequestedEnergyWh() * providers[i].getPricePerkWh() / 1000;
+            String reservationId = "res-" + ctx.getStub().getTxId() + "-" + i;
+
+            Reservation reservation = new Reservation();
+            reservation.setDocType(Constants.DOC_TYPE_RESERVATION);
+            reservation.setReservationId(reservationId);
+            reservation.setProviderId(leg.getProviderId());
+            reservation.setSlotId(slotId);
+            reservation.setDriverId(driverId);
+            reservation.setRequestedEnergy(leg.getRequestedEnergyWh() / 1000);
+            reservation.setEscrowAmount(legCost);
+            reservation.setState(Constants.RESERVATION_STATE_CONFIRMED);
+            reservation.setCreatedAt(now);
+            reservation.setWindowStart(leg.getWindowStart());
+            reservation.setWindowEnd(windowEnds[i]);
+            reservation.setExpiresAt(leg.getWindowStart() + Constants.WINDOW_GRACE_SECONDS);
+            putReservation(ctx, reservation);
+
+            Slot slot = getSlotOrThrow(ctx, leg.getProviderId(), slotId);
+            slot.setCurrentReservationId(reservationId);
+            ChaincodeUtil.putJSON(ctx, ChaincodeUtil.slotKey(ctx, leg.getProviderId(), slotId), slot);
+
+            ChargingProvider provider = providers[i];
+            provider.setCurrentAvailableSlots(provider.getCurrentAvailableSlots() - 1);
+            ChaincodeUtil.putJSON(ctx, ChaincodeUtil.providerKey(ctx, leg.getProviderId()), provider);
+
+            reservationIds.add(reservationId);
+        }
+
+        TokenLedger.debitBalance(ctx, driverId, totalCost);
+
+        return ChaincodeUtil.toJSON(reservationIds);
+    }
+
+    /**
+     * Cancels a set of reservations in one transaction, refunding all
+     * locked escrow and freeing all their buckets. Driver or provider owner
+     * only, checked per reservation. Any single failure aborts the whole
+     * batch (Fabric's all-or-nothing transaction semantics), so a partial
+     * trip cancellation never happens.
+     */
+    @Transaction(intent = Transaction.TYPE.SUBMIT)
+    public String CancelTripLegs(final Context ctx, final String reservationIdsJSON) {
+        String[] reservationIds = ChaincodeUtil.fromJSON(reservationIdsJSON, String[].class);
+        if (reservationIds == null || reservationIds.length == 0) {
+            throw new ChaincodeException("reservationIds must be a non-empty array");
+        }
+        String callerId = ChaincodeUtil.getCallerID(ctx);
+
+        long totalRefunded = 0;
+        for (String reservationId : reservationIds) {
+            Reservation reservation = getReservationOrThrow(ctx, reservationId);
+            ChargingProvider provider = GetProvider(ctx, reservation.getProviderId());
+            if (!reservation.getDriverId().equals(callerId) && !provider.getOwnerId().equals(callerId)) {
+                throw new ChaincodeException("only the driver or provider owner may cancel reservation " + reservationId);
+            }
+            String state = reservation.getState();
+            if (!Constants.RESERVATION_STATE_REQUESTED.equals(state) && !Constants.RESERVATION_STATE_CONFIRMED.equals(state)) {
+                throw new ChaincodeException("reservation " + reservationId + " cannot be cancelled from state " + state);
+            }
+
+            if (reservation.getEscrowAmount() > 0) {
+                TokenLedger.creditBalance(ctx, reservation.getDriverId(), reservation.getEscrowAmount());
+                totalRefunded += reservation.getEscrowAmount();
+                reservation.setEscrowAmount(0);
+            }
+            reservation.setState(Constants.RESERVATION_STATE_CANCELLED);
+            putReservation(ctx, reservation);
+            freeSlot(ctx, reservation);
+        }
+
+        return ChaincodeUtil.toJSON(totalRefunded);
     }
 
     /**
@@ -570,7 +891,7 @@ public final class SmartContract implements ContractInterface {
             reservation.setEscrowAmount(0);
         }
         reservation.setState(Constants.RESERVATION_STATE_EXPIRED);
-        ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservation.getReservationId()), reservation);
+        putReservation(ctx, reservation);
         freeSlot(ctx, reservation);
     }
 
@@ -580,73 +901,107 @@ public final class SmartContract implements ContractInterface {
         return getReservationOrThrow(ctx, reservationId);
     }
 
-    /** Lists all reservations made by a given driver, most useful for the driver's own reservation/session status view. */
+    /** Lists all reservations made by a given driver, most useful for the driver's own reservation/session status view. driverId is public, so this queries public state directly. */
     @Transaction(intent = Transaction.TYPE.EVALUATE)
     public String QueryReservationsByDriver(final Context ctx, final String driverId) {
         Map<String, Object> selector = new HashMap<>();
         selector.put("driverId", driverId);
-        return queryReservations(ctx, selector);
+        return ChaincodeUtil.toJSON(mergeReservations(ctx, queryPublicReservations(ctx, selector)));
     }
 
-    /** Lists all reservations against a given provider, most useful for a provider owner's pending-approvals view. */
+    /**
+     * Lists all reservations against a given provider, for a provider
+     * owner's pending-approvals view. providerId is private (section 7.2),
+     * so -- unlike the other Query* methods here -- this queries the
+     * trajectoryCollection's own rich-query index first, then fetches each
+     * hit's public record to complete the view.
+     */
     @Transaction(intent = Transaction.TYPE.EVALUATE)
     public String QueryReservationsByProvider(final Context ctx, final String providerId) {
         Map<String, Object> selector = new HashMap<>();
         selector.put("providerId", providerId);
-        return queryReservations(ctx, selector);
+        return ChaincodeUtil.toJSON(mergeReservationsFromTrajectories(ctx, queryTrajectories(ctx, selector)));
     }
 
-    /** Lists all reservations in a given state, used by an external process to sweep for timed-out reservations. */
+    /** Lists all reservations in a given state, used by an external process to sweep for timed-out reservations. state is public, so this queries public state directly. */
     @Transaction(intent = Transaction.TYPE.EVALUATE)
     public String QueryReservationsByState(final Context ctx, final String state) {
         Map<String, Object> selector = new HashMap<>();
         selector.put("state", state);
-        return queryReservations(ctx, selector);
+        return ChaincodeUtil.toJSON(mergeReservations(ctx, queryPublicReservations(ctx, selector)));
     }
 
-    private String queryReservations(final Context ctx, final Map<String, Object> selector) {
+    private List<ReservationPublic> queryPublicReservations(final Context ctx, final Map<String, Object> selector) {
         selector.put("docType", Constants.DOC_TYPE_RESERVATION);
         Map<String, Object> query = new HashMap<>();
         query.put("selector", selector);
 
-        List<Reservation> reservations = new ArrayList<>();
+        List<ReservationPublic> reservations = new ArrayList<>();
         try (QueryResultsIterator<KeyValue> results = ctx.getStub().getQueryResult(ChaincodeUtil.toJSON(query))) {
             for (KeyValue result : results) {
-                reservations.add(ChaincodeUtil.fromJSON(result.getStringValue(), Reservation.class));
+                reservations.add(ChaincodeUtil.fromJSON(result.getStringValue(), ReservationPublic.class));
             }
         } catch (RuntimeException e) {
             throw new ChaincodeException("failed to execute rich query: " + e.getMessage());
         }
-        return ChaincodeUtil.toJSON(reservations);
+        return reservations;
     }
 
-    /** True if a provider has any reservation in a non-terminal state (REQUESTED/CONFIRMED/ACTIVE). */
-    private boolean hasOpenReservations(final Context ctx, final String providerId) {
-        Map<String, Object> selector = new HashMap<>();
-        selector.put("docType", Constants.DOC_TYPE_RESERVATION);
-        selector.put("providerId", providerId);
-        Map<String, Object> stateFilter = new HashMap<>();
-        stateFilter.put("$in", Arrays.asList(
-                Constants.RESERVATION_STATE_REQUESTED,
-                Constants.RESERVATION_STATE_CONFIRMED,
-                Constants.RESERVATION_STATE_ACTIVE));
-        selector.put("state", stateFilter);
+    private List<ReservationTrajectory> queryTrajectories(final Context ctx, final Map<String, Object> selector) {
+        selector.put("docType", Constants.DOC_TYPE_RESERVATION_TRAJECTORY);
         Map<String, Object> query = new HashMap<>();
         query.put("selector", selector);
 
-        try (QueryResultsIterator<KeyValue> results = ctx.getStub().getQueryResult(ChaincodeUtil.toJSON(query))) {
-            return results.iterator().hasNext();
+        List<ReservationTrajectory> trajectories = new ArrayList<>();
+        try (QueryResultsIterator<KeyValue> results = ctx.getStub().getPrivateDataQueryResult(Constants.TRAJECTORY_COLLECTION, ChaincodeUtil.toJSON(query))) {
+            for (KeyValue result : results) {
+                trajectories.add(ChaincodeUtil.fromJSON(result.getStringValue(), ReservationTrajectory.class));
+            }
         } catch (RuntimeException e) {
-            throw new ChaincodeException("failed to execute rich query: " + e.getMessage());
+            throw new ChaincodeException("failed to execute private rich query: " + e.getMessage());
         }
+        return trajectories;
+    }
+
+    private List<Reservation> mergeReservations(final Context ctx, final List<ReservationPublic> publics) {
+        List<Reservation> merged = new ArrayList<>();
+        for (ReservationPublic pub : publics) {
+            ReservationTrajectory traj = ChaincodeUtil.getPrivateJSON(
+                    ctx, Constants.TRAJECTORY_COLLECTION, ChaincodeUtil.reservationKey(ctx, pub.getReservationId()), ReservationTrajectory.class);
+            merged.add(mergeReservation(pub, traj));
+        }
+        return merged;
+    }
+
+    private List<Reservation> mergeReservationsFromTrajectories(final Context ctx, final List<ReservationTrajectory> trajectories) {
+        List<Reservation> merged = new ArrayList<>();
+        for (ReservationTrajectory traj : trajectories) {
+            ReservationPublic pub = ChaincodeUtil.getJSON(ctx, ChaincodeUtil.reservationKey(ctx, traj.getReservationId()), ReservationPublic.class);
+            merged.add(mergeReservation(pub, traj));
+        }
+        return merged;
+    }
+
+    /** True if a provider has any reservation in a non-terminal state (REQUESTED/CONFIRMED/ACTIVE). providerId is private, so this queries the trajectoryCollection, then checks each hit's public state. */
+    private boolean hasOpenReservations(final Context ctx, final String providerId) {
+        Map<String, Object> selector = new HashMap<>();
+        selector.put("providerId", providerId);
+        for (ReservationTrajectory traj : queryTrajectories(ctx, selector)) {
+            ReservationPublic pub = ChaincodeUtil.getJSON(ctx, ChaincodeUtil.reservationKey(ctx, traj.getReservationId()), ReservationPublic.class);
+            if (Constants.RESERVATION_STATE_REQUESTED.equals(pub.getState())
+                    || Constants.RESERVATION_STATE_CONFIRMED.equals(pub.getState())
+                    || Constants.RESERVATION_STATE_ACTIVE.equals(pub.getState())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
      * Clears a slot's current-reservation pointer, bumps the provider's
-     * available-slot counter back up, and frees the booking bucket the given
-     * reservation claimed (derived from its createdAt, since walk-up
-     * reservations always book the bucket containing `now` at creation --
-     * TRIP_RESERVATION_ADDENDUM.md section 3.3).
+     * available-slot counter back up, and frees every booking bucket in
+     * [windowStart, windowEnd) the given reservation claimed (section 9:
+     * cancel/expire must free all of a reservation's buckets, not just one).
      */
     private void freeSlot(final Context ctx, final Reservation reservation) {
         String providerId = reservation.getProviderId();
@@ -660,7 +1015,9 @@ public final class SmartContract implements ContractInterface {
         provider.setCurrentAvailableSlots(provider.getCurrentAvailableSlots() + 1);
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.providerKey(ctx, providerId), provider);
 
-        freeBucket(ctx, providerId, slotId, ChaincodeUtil.floorToBucket(reservation.getCreatedAt()));
+        for (long bucketStart : bucketsInWindow(reservation.getWindowStart(), reservation.getWindowEnd())) {
+            freeBucket(ctx, providerId, slotId, bucketStart);
+        }
     }
 
     // ==================== Sessions ====================
@@ -690,6 +1047,10 @@ public final class SmartContract implements ContractInterface {
         }
 
         long now = ChaincodeUtil.txNow(ctx);
+        if (now < reservation.getWindowStart() - Constants.CLOCK_SKEW_TOLERANCE_SECONDS) {
+            throw new ChaincodeException("reservation " + reservationId + " cannot start before its window (starts at "
+                    + reservation.getWindowStart() + ")");
+        }
         if (now > reservation.getExpiresAt()) {
             expireReservation(ctx, reservation);
             throw new ChaincodeException("reservation " + reservationId + " expired before the session was started");
@@ -717,7 +1078,7 @@ public final class SmartContract implements ContractInterface {
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.sessionKey(ctx, sessionId), session);
 
         reservation.setState(Constants.RESERVATION_STATE_ACTIVE);
-        ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservationId), reservation);
+        putReservation(ctx, reservation);
 
         return sessionId;
     }
@@ -843,7 +1204,7 @@ public final class SmartContract implements ContractInterface {
         ChaincodeUtil.putJSON(ctx, ChaincodeUtil.sessionKey(ctx, sessionId), session);
 
         reservation.setState(Constants.RESERVATION_STATE_COMPLETED);
-        ChaincodeUtil.putJSON(ctx, ChaincodeUtil.reservationKey(ctx, reservation.getReservationId()), reservation);
+        putReservation(ctx, reservation);
 
         // Reconcile: availableEnergy was decremented by requestedEnergy at
         // confirmation; add back the unused portion now that actual
@@ -919,9 +1280,12 @@ public final class SmartContract implements ContractInterface {
     // ==================== Admin ====================
 
     /**
-     * Deletes all providers, slots, reservations, and sessions from world
-     * state. Dev-only reset utility, admin-only; leaves users and token
-     * balances untouched.
+     * Deletes all providers, slots, reservations, sessions, and booking/
+     * trajectory data from world state and the trajectoryCollection.
+     * Dev-only reset utility, admin-only; leaves users and token balances
+     * untouched. This is also the documented, intended way to cross the R5
+     * public/private boundary on a dev network -- no migration is needed
+     * because there is nothing to migrate through a reset.
      */
     @Transaction(intent = Transaction.TYPE.SUBMIT)
     public void ResetMarketplaceData(final Context ctx) {
@@ -936,12 +1300,22 @@ public final class SmartContract implements ContractInterface {
         deleteAllOfType(ctx, "charger");
         deleteAllOfType(ctx, "reading");
         deleteAllOfType(ctx, "malfunction");
+        deleteAllOfType(ctx, "booking");
+        deleteAllPrivateOfType(ctx, Constants.TRAJECTORY_COLLECTION, "reservation");
     }
 
     private void deleteAllOfType(final Context ctx, final String objectType) {
         try (QueryResultsIterator<KeyValue> results = ctx.getStub().getStateByPartialCompositeKey(objectType)) {
             for (KeyValue result : results) {
                 ctx.getStub().delState(result.getKey());
+            }
+        }
+    }
+
+    private void deleteAllPrivateOfType(final Context ctx, final String collection, final String objectType) {
+        try (QueryResultsIterator<KeyValue> results = ctx.getStub().getPrivateDataByPartialCompositeKey(collection, objectType)) {
+            for (KeyValue result : results) {
+                ctx.getStub().delPrivateData(collection, result.getKey());
             }
         }
     }

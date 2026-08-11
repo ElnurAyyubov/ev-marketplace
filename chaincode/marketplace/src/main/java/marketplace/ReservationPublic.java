@@ -7,25 +7,24 @@ import org.hyperledger.fabric.contract.annotation.DataType;
 import org.hyperledger.fabric.contract.annotation.Property;
 
 /**
- * A driver's hold on a slot, including escrowed funds. Escrow is
- * represented implicitly via escrowAmount + state (no separate escrow
- * record for the MVP).
+ * The public half of a reservation (TRIP_RESERVATION_ADDENDUM.md section
+ * 7.2): everything that does not, by itself or combined with the public
+ * booking-bucket keys, reveal where or when the driver will be. "This driver
+ * holds a reservation" -- no place, no time. The trajectory-revealing half
+ * (providerId, slotId, windowStart, windowEnd, expiresAt) lives in
+ * {@link ReservationTrajectory}, in the {@code trajectoryCollection} private
+ * data collection.
  */
 @DataType()
-public class Reservation {
+public class ReservationPublic {
 
     @Property() private String docType;
     @Property() private String reservationId;
-    @Property() private String providerId;
-    @Property() private String slotId;
     @Property() private String driverId;
     @Property() private long requestedEnergy;
     @Property() private long escrowAmount;
     @Property() private String state;
     @Property() private long createdAt;
-    @Property() private long expiresAt;
-    @Property() private long windowStart;
-    @Property() private long windowEnd;
 
     public String getDocType() {
         return docType;
@@ -41,22 +40,6 @@ public class Reservation {
 
     public void setReservationId(final String reservationId) {
         this.reservationId = reservationId;
-    }
-
-    public String getProviderId() {
-        return providerId;
-    }
-
-    public void setProviderId(final String providerId) {
-        this.providerId = providerId;
-    }
-
-    public String getSlotId() {
-        return slotId;
-    }
-
-    public void setSlotId(final String slotId) {
-        this.slotId = slotId;
     }
 
     public String getDriverId() {
@@ -97,29 +80,5 @@ public class Reservation {
 
     public void setCreatedAt(final long createdAt) {
         this.createdAt = createdAt;
-    }
-
-    public long getExpiresAt() {
-        return expiresAt;
-    }
-
-    public void setExpiresAt(final long expiresAt) {
-        this.expiresAt = expiresAt;
-    }
-
-    public long getWindowStart() {
-        return windowStart;
-    }
-
-    public void setWindowStart(final long windowStart) {
-        this.windowStart = windowStart;
-    }
-
-    public long getWindowEnd() {
-        return windowEnd;
-    }
-
-    public void setWindowEnd(final long windowEnd) {
-        this.windowEnd = windowEnd;
     }
 }
