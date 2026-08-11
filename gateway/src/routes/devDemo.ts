@@ -48,8 +48,19 @@ async function proxyToSim(port: number, path: string, body: unknown): Promise<vo
     body: JSON.stringify(body ?? {}),
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new HttpError(res.status, `charger-sim on :${port} rejected ${path}: ${detail}`);
+    // charger-sim's admin API already unwraps the real chaincode rejection
+    // (charger-sim/src/util.ts's describeError) into { error }; propagate
+    // that message as-is rather than nesting it inside a stringified body,
+    // so a frontend caller matching on its text (e.g. the demo runner's
+    // "cannot start before its window" retry check) sees it directly.
+    const detail = await res
+      .json()
+      .then((parsed: unknown) => {
+        const error = (parsed as { error?: unknown } | null)?.error;
+        return typeof error === 'string' ? error : JSON.stringify(parsed);
+      })
+      .catch(() => res.statusText);
+    throw new HttpError(res.status, detail);
   }
 }
 

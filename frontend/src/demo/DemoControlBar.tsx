@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { DemoActivityLog } from './DemoActivityLog';
-import { DemoPhase } from './types';
+import { DemoBookingMode, DemoPhase } from './types';
 import { UseDemoRunnerResult } from './useDemoRunner';
 
 interface Props {
   runner: UseDemoRunnerResult;
+  stopCount: number;
 }
 
 const DEFAULT_SPEED_KMH = 3000;
 const DEFAULT_ENERGY_PER_STOP_KWH = '20';
+const CONFLICT_STOP_INDEX = 1; // "stop 2", per DEMO_RUNNER_ADDENDUM.md section 8/9 (D5)'s worked example
 
 function describePhase(phase: DemoPhase): string {
   switch (phase.kind) {
@@ -20,8 +22,10 @@ function describePhase(phase: DemoPhase): string {
       return `Arrived, leg ${phase.legIndex + 1}`;
     case 'reserving':
       return `Reserving stop ${phase.legIndex + 1}`;
-    case 'waiting':
-      return `Waiting for reservation window to open (stop ${phase.legIndex + 1})`;
+    case 'waiting': {
+      const opensIn = Math.max(0, phase.opensAt - Math.floor(Date.now() / 1000));
+      return `Waiting for reservation window to open (stop ${phase.legIndex + 1}, ~${Math.ceil(opensIn / 60)} min)`;
+    }
     case 'plugging':
       return `Plugging in, stop ${phase.legIndex + 1}`;
     case 'charging':
@@ -36,12 +40,15 @@ function describePhase(phase: DemoPhase): string {
 }
 
 /**
- * Dev-only demo controls (DEMO_RUNNER_ADDENDUM.md section 2.2/3/4). Mounted
- * only under VITE_ENABLE_DEV_DEMO -- see DemoTripSection.tsx.
+ * Dev-only demo controls (DEMO_RUNNER_ADDENDUM.md section 2.2/3/4/8).
+ * Mounted only under VITE_ENABLE_DEV_DEMO -- see DemoTripSection.tsx.
  */
-export function DemoControlBar({ runner }: Props) {
+export function DemoControlBar({ runner, stopCount }: Props) {
   const [speedKmh, setSpeedKmh] = useState(DEFAULT_SPEED_KMH);
   const [energyPerStopKwh, setEnergyPerStopKwh] = useState(DEFAULT_ENERGY_PER_STOP_KWH);
+  const [bookingMode, setBookingMode] = useState<DemoBookingMode>('on-arrival');
+
+  const canInjectConflict = runner.running && stopCount > CONFLICT_STOP_INDEX;
 
   return (
     <div style={{ background: '#fff7e6', border: '1px solid #e0b84a', borderRadius: 6, padding: 10, marginTop: 12 }}>
@@ -69,13 +76,24 @@ export function DemoControlBar({ runner }: Props) {
             disabled={runner.running}
           />
         </div>
+        <div className="field" style={{ maxWidth: 200 }}>
+          <label>Booking</label>
+          <select
+            value={bookingMode}
+            onChange={(e) => setBookingMode(e.target.value as DemoBookingMode)}
+            disabled={runner.running}
+          >
+            <option value="on-arrival">Book each stop on arrival</option>
+            <option value="upfront">Book whole trip upfront</option>
+          </select>
+        </div>
         {!runner.running ? (
           <button
             onClick={() =>
               runner.start({
                 assumedSpeedKmh: speedKmh,
                 requestedEnergyWhPerStop: Math.round(Number(energyPerStopKwh) * 1000),
-                bookingMode: 'on-arrival',
+                bookingMode,
               })
             }
           >
@@ -86,6 +104,24 @@ export function DemoControlBar({ runner }: Props) {
             Stop
           </button>
         )}
+      </div>
+
+      {bookingMode === 'upfront' && !runner.running && (
+        <p style={{ fontSize: 12, color: '#8a6d1a', margin: '6px 0 0' }}>
+          Booking the whole trip upfront genuinely waits for each stop's reservation window to open (~20 min per
+          stop) -- this mode is slow by design; it demonstrates pre-reservation, not speed.
+        </p>
+      )}
+
+      <div className="row" style={{ marginTop: 8, alignItems: 'center' }}>
+        <button
+          className="secondary"
+          disabled={!canInjectConflict}
+          onClick={() => runner.injectConflictAtStop(CONFLICT_STOP_INDEX)}
+          title="Books the same slot/window as a second driver identity, exercising the real 409 conflict path (D5)"
+        >
+          Inject conflict at stop {CONFLICT_STOP_INDEX + 1}
+        </button>
       </div>
 
       <p style={{ fontSize: 13, margin: '8px 0 0' }}>{describePhase(runner.phase)}</p>

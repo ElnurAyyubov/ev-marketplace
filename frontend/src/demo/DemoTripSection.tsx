@@ -23,7 +23,7 @@ export function DemoTripSection({ plan }: Props) {
   return (
     <>
       <TripPlanMap plan={plan} overlay={runner.carPosition ? <CarMarker position={runner.carPosition} /> : undefined} />
-      <DemoControlBar runner={runner} />
+      <DemoControlBar runner={runner} stopCount={plan.stops.length} />
     </>
   );
 }
