@@ -1,12 +1,33 @@
-# EV Charging Marketplace — MVP
+# EV Charging Marketplace
 
 A decentralized marketplace for community-owned EV charging infrastructure,
-built on Hyperledger Fabric. Drivers can discover, reserve, use, and pay for
-charging at both commercial stations and residential charge points. See
-`MVP_BUILD_SPEC.md` for the full base design and milestone breakdown, and
-`SMART_CHARGER_ADDENDUM.md` for the metering/settlement architecture
-actually implemented (it amends and supersedes the base spec's
-provider-reported-energy + challenge-window escrow design).
+built on Hyperledger Fabric. Drivers discover, reserve, use, and pay for
+charging at both commercial stations and residential charge points, with
+settlement computed on-ledger from signed smart-meter readings rather than
+a self-reported number. See `MVP_BUILD_SPEC.md` for the original base
+design and milestone breakdown, and `SMART_CHARGER_ADDENDUM.md` for the
+metering/settlement architecture actually implemented (it amends and
+supersedes the base spec's provider-reported-energy + challenge-window
+escrow design).
+
+## What's in scope
+
+- **Marketplace** — typed filters (type/price/approval), free-text
+  natural-language search, and push-to-talk voice search all resolve to
+  the same whitelisted CouchDB query.
+- **Reservations** — pre-authorization holds, an owner-approval workflow
+  for residential providers, and time-bucketed booking keys for slot
+  exclusivity.
+- **Smart-charger metering & settlement** — the charger is itself a ledger
+  identity: it signs and submits cumulative meter readings, and
+  settlement is computed from the last on-ledger reading, never a typed-in
+  number (see "Trust assumption" below).
+- **Trip planning** — a deterministic, read-only route advisor that
+  suggests charging stops between an origin and a destination.
+- **Driver location & distance filtering** — resolved and filtered
+  client-side/gateway-side, never sent to the ledger.
+- **Self-provisioning deployment** — a container image that enrolls its
+  own ledger identity on first boot, for installing on a physical device.
 
 ## Trust assumption (stated verbatim, per the addendum)
 
@@ -247,6 +268,17 @@ terminal/browser tab:
    reading, paying the provider and refunding the driver the remainder.
    No party ever types in a delivered-energy number.
 
+## Trip planning
+
+The "Trip Planner" tab plans a route between an origin and a destination
+subject to a fixed maximum leg distance (`maxLegKm`, default 300 km),
+returning an ordered list of charging stops as a read-only suggestion — it
+does not reserve anything and holds no trip state between requests.
+Request a plan through the form fields or a free-text prompt
+(`POST /trip/plan` and `POST /trip/plan/nl`); the planning algorithm
+itself is deterministic, and the LLM only parses the free-text request and
+narrates the result. See `TRIP_PLANNER_ADDENDUM.md` for the full design.
+
 ## Driver (car) location
 
 `CAR_LOCATION_ADDENDUM.md` adds a driver/car location, shown as a distinct
@@ -315,7 +347,7 @@ number, then applied through the **client-side** "within X km" filter
 above — never sent to the gateway/peer as a coordinate, consistent with the
 driver-location privacy invariant.
 
-## Known MVP limitations (documented, not bugs)
+## Known limitations (documented, not bugs)
 
 - Token balances are simple mutable counters
   (`chaincode/marketplace/src/main/java/marketplace/TokenLedger.java`), not
